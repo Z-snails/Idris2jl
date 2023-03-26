@@ -1,0 +1,10 @@
+[custom.all.idris2jl]
+type = "local"
+path = "."
+ipkg = "julia-cg.ipkg"
+test = "test/test.ipkg"
+
+[custom.all.idris2jl-test]
+type = "local"
+path = "test"
+ipkg = "test.ipkg"

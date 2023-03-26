@@ -1,0 +1,23 @@
+prim__sub_Integer = [{arg:0}, {arg:1}]: (-Integer [!{arg:0}, !{arg:1}])
+Main.main = [{ext:0}]: (Prelude.IO.prim__putStr [(++ [(Prelude.Show.show [10]), "\n"]), !{ext:0}])
+Prelude.Types.prim__integerToNat = [{arg:0}]: (%case (<=Integer [0, !{arg:0}]) [(%constcase 0 0)] Just (believe_me [___, ___, !{arg:0}]))
+Prelude.EqOrd.compare = [{arg:0}, {arg:1}]: (%case (Prelude.EqOrd.< [!{arg:0}, !{arg:1}]) [(%constcase 1 0), (%constcase 0 (%case (Prelude.EqOrd.== [!{arg:0}, !{arg:1}]) [(%constcase 1 1), (%constcase 0 2)] Nothing))] Nothing)
+Prelude.EqOrd.== = [{arg:0}, {arg:1}]: (%case !{arg:0} [(%constcase 0 (%case !{arg:1} [(%constcase 0 1)] Just 0)), (%constcase 1 (%case !{arg:1} [(%constcase 1 1)] Just 0)), (%constcase 2 (%case !{arg:1} [(%constcase 2 1)] Just 0))] Just 0)
+Prelude.EqOrd.== = [{arg:0}, {arg:1}]: (%case (==Integer [!{arg:0}, !{arg:1}]) [(%constcase 0 0)] Just 1)
+Prelude.EqOrd.== = [{arg:0}, {arg:1}]: (%case (==Char [!{arg:0}, !{arg:1}]) [(%constcase 0 0)] Just 1)
+Prelude.EqOrd.< = [{arg:0}, {arg:1}]: (%case (<Integer [!{arg:0}, !{arg:1}]) [(%constcase 0 0)] Just 1)
+Prelude.EqOrd./= = [{arg:0}, {arg:1}]: (%case (Prelude.EqOrd.== [!{arg:0}, !{arg:1}]) [(%constcase 1 0), (%constcase 0 1)] Nothing)
+Prelude.EqOrd.compareInteger = [{ext:0}, {ext:1}]: (Prelude.EqOrd.compare [!{ext:0}, !{ext:1}])
+Prelude.Show.show = [{arg:0}]: (Prelude.Show.showPrec [(%con Prelude.Show.Open Just 0 []), !{arg:0}])
+Prelude.Show.showPrec = [{ext:0}, {ext:1}]: (Prelude.Show.primNumShow [(%lam {eta:0} (cast-Integer-String [!{eta:0}])), !{ext:0}, !{ext:1}])
+Prelude.Show.compare = [{arg:0}, {arg:1}]: (%case !{arg:0} [(%concase Prelude.Show.User Just 4 [{e:0}] (%case !{arg:1} [(%concase Prelude.Show.User Just 4 [{e:1}] (Prelude.EqOrd.compare [!{e:0}, !{e:1}]))] Just (Prelude.EqOrd.compare [(Prelude.Show.precCon [!{arg:0}]), (Prelude.Show.precCon [!{arg:1}])])))] Just (Prelude.EqOrd.compare [(Prelude.Show.precCon [!{arg:0}]), (Prelude.Show.precCon [!{arg:1}])]))
+Prelude.Show.>= = [{arg:0}, {arg:1}]: (Prelude.EqOrd./= [(Prelude.Show.compare [!{arg:0}, !{arg:1}]), 0])
+Prelude.Show.showParens = [{arg:0}, {arg:1}]: (%case !{arg:0} [(%constcase 0 !{arg:1}), (%constcase 1 (++ ["(", (++ [!{arg:1}, ")"])]))] Nothing)
+Prelude.Show.primNumShow = [{arg:1}, {arg:2}, {arg:3}]: (%let str (!{arg:1} [!{arg:3}]) (Prelude.Show.showParens [(%case (Prelude.Show.>= [!{arg:2}, (%con Prelude.Show.PrefixMinus Just 5 [])]) [(%constcase 1 (Prelude.Show.firstCharIs [(%lam {arg:0} (Prelude.EqOrd.== [!{arg:0}, '-'])), !str])), (%constcase 0 0)] Nothing), !str]))
+Prelude.Show.precCon = [{arg:0}]: (%case !{arg:0} [(%concase Prelude.Show.Open Just 0 [] 0), (%concase Prelude.Show.Equal Just 1 [] 1), (%concase Prelude.Show.Dollar Just 2 [] 2), (%concase Prelude.Show.Backtick Just 3 [] 3), (%concase Prelude.Show.User Just 4 [{e:0}] 4), (%concase Prelude.Show.PrefixMinus Just 5 [] 5), (%concase Prelude.Show.App Just 6 [] 6)] Nothing)
+Prelude.Show.firstCharIs = [{arg:0}, {arg:1}]: (%case !{arg:1} [(%constcase "" 0)] Just (!{arg:0} [(op_strhead [!{arg:1}])]))
+Prelude.Show.PrefixMinus = Constructor tag Just 5 arity 0
+Prelude.Show.Open = Constructor tag Just 0 arity 0
+Prelude.IO.prim__putStr = Foreign call ["C:idris2_putStr, libidris2_support, idris_support.h", "node:lambda:x=>process.stdout.write(x)", "browser:lambda:x=>console.log(x)"] [String, %World] -> IORes Unit
+PrimIO.unsafePerformIO = [{arg:1}]: (%let {eff:0} !{arg:1} (PrimIO.unsafeCreateWorld [(%lam w (%let {eff:1} (!{eff:0} [!w]) !{eff:1}))]))
+PrimIO.unsafeCreateWorld = [{arg:1}]: (!{arg:1} [%MkWorld])
