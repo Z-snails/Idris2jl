@@ -33,3 +33,10 @@ export
 liftEither : Either Error a -> Core a
 liftEither (Right x) = pure x
 liftEither (Left err) = coreFail err
+
+export
+findMap : (a -> Maybe b) -> List a -> Maybe b
+findMap f [] = Nothing
+findMap f (x :: xs) = case f x of
+    r@(Just _) => r
+    Nothing => findMap f xs

@@ -2,9 +2,8 @@
 type = "local"
 path = "."
 ipkg = "julia-cg.ipkg"
-test = "test/test.ipkg"
 
-[custom.all.idris2jl-test]
+[custom.all.simd-jl]
 type = "local"
-path = "test"
-ipkg = "test.ipkg"
+path = "./simd"
+ipkg = "simd-jl.ipkg"

@@ -14,6 +14,9 @@ import Data.Vect
 import Libraries.Data.StringMap
 import Libraries.Data.StringTrie
 
+call : String -> List JExpr -> JExpr
+call fn as = App (JName fn) as
+
 requiresLet : NamedCExp -> Bool
 requiresLet (NmLocal {}) = False
 requiresLet (NmRef {}) = False
@@ -54,12 +57,14 @@ expr (NmRef fc n) = pure $ Var n
 expr (NmLam fc n y) = pure $ Lam n !(expr y)
 expr (NmLet fc n y z) = pure $ mkLet (n, Nothing, !(expr y)) !(expr z)
 expr (NmApp fc x xs) = pure $ App !(expr x) !(traverse expr xs)
-expr (NmCon fc n x tag xs) = pure $ App (Var n) !(traverse expr xs)
+expr (NmCon fc n NIL tag []) = pure $ JName "nothing"
+expr (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Cons" !(traverse expr xs)
+expr (NmCon fc n inf tag xs) = pure $ App (Var n) !(traverse expr xs)
 expr (NmOp fc f xs) = if isCompare f
-    then pure $ App (JName "Int") [PrimOp f !(traverse expr xs)]
+    then pure $ call "Int" [PrimOp f !(traverse expr xs)]
     else pure $ PrimOp f !(traverse expr xs)
 expr (NmExtPrim fc p xs) = lift $ Left (fc, "not yet implemented")
-expr (NmForce fc lz x) = pure $ App (JName "force") [!(expr x)]
+expr (NmForce fc lz x) = pure $ call "force" [!(expr x)]
 expr (NmDelay fc lz x) = pure $ Macro "delay" [!(expr x)]
 expr (NmConCase fc sc xs def) = if requiresLet sc
     then do
@@ -73,7 +78,7 @@ expr (NmConstCase fc sc xs def) = if requiresLet sc
     else mkConstCase fc !(expr sc) xs def
 expr (NmPrimVal fc cst) = pure $ Lit cst
 expr (NmErased fc) = pure NothingVal
-expr (NmCrash fc str) = pure $ Throw (App (JName "IdrError") [Lit (Str str)])
+expr (NmCrash fc str) = pure $ Throw (call "IdrError" [Lit (Str str)])
 
 bindAll : JExpr -> Nat -> List Name -> JExpr -> JExpr
 bindAll sc k [] e = e
@@ -81,10 +86,14 @@ bindAll sc k (n :: ns) e = mkLet (n, Nothing, Field sc "v\{show k}") (bindAll sc
 
 mkConCase fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
 mkConCase fc sc [] (Just def) = expr def
-mkConCase fc sc (MkNConAlt n _ _ as e :: xs) def =
-    pure $ IfExpr (sc `IsA` (VarTy n))
-        (bindAll sc 0 as !(expr e))
-        !(mkConCase fc sc xs def)
+mkConCase fc sc (MkNConAlt n inf _ as e :: xs) def =
+    let f = \e => case (inf, as) of
+            (NIL, []) => IfExpr (call "isnothing" [sc]) e
+            (CONS, [fst, snd]) => IfExpr (call "notnothing" [sc])
+                (Let ((fst, Nothing, Field sc "fst") ::: [(snd, Nothing, Field sc "snd")]) e)
+            _ => IfExpr (sc `IsA` (VarTy n))
+                (bindAll sc 0 as e)
+    in pure $ f !(expr e) !(mkConCase fc sc xs def)
 
 mkConstCase fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
 mkConstCase fc sc [] (Just def) = expr def
@@ -167,9 +176,31 @@ knownForeign : Name -> InlineOk -> List String -> Maybe (Fun, List String)
 knownForeign n inl [] = Nothing
 knownForeign n inl (cc :: ccs) = try (trim cc) <|> knownForeign n inl ccs
     where
+    callSupport : InlineOk -> List (Maybe JType) -> String -> Fun
+    callSupport inl tys fn =
+        let as = enumerate tys
+         in MkFun n inl
+                ((\(i, ty) => (MN "arg" $ cast i, ty)) <$> as)
+                Nothing
+                $ call fn ((\(i, _) => Var $ MN "arg" $ cast i) <$> as)
+
     try : String -> Maybe (Fun, List String)
-    try "scheme:blodwen-new-buffer" = Just (MkFun n inl [(MN "len" 0, Just intType)] Nothing $ App (JName "Buffer") [Var $ MN "len" 0], [])
-    try "scheme:blodwen-buffer-size" = Just (Fun.untyped n inl [MN "buf" 0] Nothing $ App (JName "length") [Var $ MN "buf" 0], [])
+    try "scheme:blodwen-new-buffer" =
+        Just (callSupport inl [Just intType] "Buffer", [])
+    try "scheme:blodwen-buffer-size" =
+        Just (callSupport inl [Nothing] "Base.length", [])
+    try "C:idris2_isNull, libidris2_support, idris_support.h" =
+        Just (callSupport YesInline [Just voidPtr] "idris_isNull", [])
+    try "C:idris2_getNull, libidris2_support, idris_support.h" =
+        Just (callSupport YesInline [] "idris_getNull", [])
+    try "scheme:blodwen-thread" =
+        Just (callSupport inl [Nothing] "idris_fork", [])
+    try "scheme:string-concat" =
+        Just (callSupport inl [Nothing] "idris_fastConcat", [])
+    try "scheme:string-pack" =
+        Just (callSupport inl [Nothing] "idris_fastPack", [])
+    try "scheme:string-unpack" =
+        Just (callSupport inl [Nothing] "idris_fastUnpack", [])
     try _ = Nothing
 
 foreign : FC -> Name  -> InlineOk -> List String -> List CFType -> CFType -> Either Error (Fun, List String)
@@ -186,12 +217,12 @@ foreign fc n inl ccs args ret = do
         Just ("C", opts) => do
             fun <- case opts of
                     fun ::: [] => Right $ JName fun
-                    fun ::: lib :: _ => Right $ Field (App (JName "joinpath") [Macro "__DIR__" [], Lit $ Str lib]) fun
+                    fun ::: lib :: _ => Right $ Field (call "joinpath" [Macro "__DIR__" [], Lit $ Str lib]) fun
             cargs <- traverse (\(v, ty) => pure $ Annot (Var v) !(mapFst (GenericMsg fc) (cType ty)))
                 $ filter (\(_, ty) => case ty of {CFWorld => False; _ => True}) args
             let call = Macro "ccall" [App fun cargs `Annot` !(mapFst (GenericMsg fc) (cType ret))]
                 call = case ret of
-                    CFString => App (JName "idris_from_Cstring") [call]
+                    CFString => Compile.call "idris_from_Cstring" [call]
                     _ => call
             pure (MkFun n inl (map (\(i, ty) => (i, juliaType ty)) args) Nothing call, [])
 

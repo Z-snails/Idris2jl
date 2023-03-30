@@ -10,6 +10,7 @@ import Libraries.Utils.Path
 import Libraries.Data.String.Builder
 import Idris.Syntax
 import Idris.Version
+import System
 import System.File
 import Compiler.Julia.Compile
 import Compiler.Julia.Printer
@@ -36,7 +37,7 @@ end
 # From Integer
 idris_cast(::Type{to}, x::Integer) where { to <: Integer } = unsafe_trunc(to, x)
 idris_cast(::Type{String}, x::Integer) = string(x)
-idris_cast(::Type{Float64}, x::Integer) = Float64(x)
+idris_cast(::Type{to}, x::Integer) where { to <: AbstractFloat } = convert(to, x)
 
 # From Float
 idris_cast(::Type{to}, x::AbstractFloat) where { to <: Integer } = unsafe_trunc(to, x)
@@ -44,6 +45,7 @@ idris_cast(::Type{String}, x::AbstractFloat) = string(x)
 
 # From Char
 idris_cast(::Type{String}, x::Char) = string(x)
+idris_cast(::Type{to}, x::Char) where { to <: Integer } = convert(to, x)
 
 # From String
 idris_cast(::Type{to}, x::String) where { to <: Integer } = parse(to, x)
@@ -69,7 +71,7 @@ function force(x::Delay)
 end
 
 function idris_crash(msg::String)
-    print(msg)
+    print(stderr, msg)
     exit(1)
 end
 
@@ -78,6 +80,55 @@ struct Buffer
 end
 
 Base.cconvert(::Type{Ptr{Cvoid}}, x::Buffer) = x.ptr
+
+@inline notnothing(x) = !isnothing(x)
+
+struct Cons
+    fst
+    snd
+end
+
+function idris_fastUnpack(x::AbstractString)
+    acc = nothing
+    for c in Iterators.reverse(x)
+        acc = Cons(c, acc)
+    end
+    return acc
+end
+
+function idris_listPrint(::Type{T}, xs::Union{Cons,Nothing}) where {T}
+    xs::Union{Cons,Nothing} = xs
+    if isnothing(xs)
+        return ""
+    else
+        io = IOBuffer()
+        while !isnothing(xs)
+            print(io, xs.fst::T)
+            xs = xs.snd::Union{Cons,Nothing}
+        end
+        return String(take!(io))
+    end
+end
+
+@inline function idris_fastPack(xs::Union{Cons,Nothing})
+    return idris_listPrint(Char, xs)
+end
+
+@inline function idris_fastConcat(xs::Union{Cons,Nothing})
+    return idris_listPrint(String, xs)
+end
+
+@inline idris_isNull(x::Ptr) = x == C_NULL
+@inline idris_getNull() = Ptr{Cvoid}(C_NULL)
+
+function idris_fork(k)
+    return Base.Threads.@spawn $k()
+end
+
+function idris_wait(thread)
+    wait(thread)
+    return
+end
 
 """
 
@@ -131,8 +182,18 @@ compile _ _ outDir tmpDir tm exe = do
 
     pure (Just outFile)
 
+locateJulia : Ref Ctxt Defs => Core (Maybe String)
+locateJulia = do
+    ds <- getDirectives (Other "julia")
+    pure $ findMap (stripPrefix "julia=") ds
+
 interpret : Ref Ctxt Defs -> Ref Syn SyntaxInfo -> String -> ClosedTerm -> Core ()
-interpret _ _ _ _ = throw $ Fatal $ GenericMsg EmptyFC "interpret not yet implemented"
+interpret c s tmpDir tm = do
+    Just out <- compile c s tmpDir tmpDir tm "__tmp_execute"
+        | Nothing => throw $ InternalError "error compiling code"
+    Just jl <- locateJulia
+        | Nothing => coreLift_ $ system [out]
+    coreLift_ $ run [jl, out]
 
 export
 julia : Codegen

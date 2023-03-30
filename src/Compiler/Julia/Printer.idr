@@ -78,6 +78,31 @@ jexpr : (needsAtom : Bool) -> JExpr -> Builder
 jbinop : Bool -> Builder -> Vect 2 JExpr -> Builder
 jbinop p op [x, y] = paren p $ jexpr True x ++ " " ++ op ++ " " ++ jexpr True y
 
+isPrintable : Char -> Bool
+isPrintable c = '!' <= c && c <= '~'
+
+escapeChar : Char -> (isString : Bool) -> Builder
+escapeChar '$' _ = "\\$"
+escapeChar '\'' False = "\\'"
+escapeChar '"' True = "\\\""
+escapeChar '\\' _ = "\\\\"
+escapeChar c _ = if isPrintable c
+    then fromString $ cast c
+    else "\\U" ++ showHex (ord c) True
+  where
+    hex : Int -> Char
+    hex x = if x < 10
+        then chr $ x + ord '0'
+        else chr $ x - 10 + ord 'a'
+
+    showHex : Int -> (firstChar : Bool) -> Builder
+    showHex 0 False = ""
+    showHex 0 True = "0"
+    showHex x _ = showHex (x `div` 16) False ++ fromString (cast $ hex (x `mod` 16))
+
+escapeString : String -> Builder
+escapeString x = concat (map (flip escapeChar True) $ unpack x)
+
 jconst : Constant -> Builder
 jconst (I i) = "Int(" ++ showB i ++ ")"
 jconst (I8 i) = "Int8(" ++ showB i ++ ")"
@@ -89,8 +114,8 @@ jconst (B8 m) = "UInt8(" ++ showB m ++ ")"
 jconst (B16 m) = "UInt16(" ++ showB m ++ ")"
 jconst (B32 m) = "UInt32(" ++ showB m ++ ")"
 jconst (B64 m) = "UInt64(" ++ showB m ++ ")"
-jconst (Str str) = showB str
-jconst (Ch c) = showB c
+jconst (Str str) = "\"" ++ escapeString str ++ "\""
+jconst (Ch c) = "'" ++ escapeChar c False ++ "'"
 jconst (Db x) = "Int(" ++ showB x ++ ")"
 jconst (PrT pty) = "nothing"
 jconst WorldVal = "nothing"

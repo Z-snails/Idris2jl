@@ -1,4 +1,4 @@
-package julia-cg-test
+package simd-jl
 version = 0.1.0
 authors = "Zoe Stafford"
 -- maintainers =
@@ -16,13 +16,13 @@ authors = "Zoe Stafford"
 -- depends =
 
 -- modules to install
--- modules =
+modules = Julia.Simd
 
 -- main file (i.e. file to load at REPL)
-main = Main
+-- main = Main
 
 -- name of executable
-executable = "julia-cg-test"
+-- executable =
 -- opts =
 sourcedir = "src"
 -- builddir =
