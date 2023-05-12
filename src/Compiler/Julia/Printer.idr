@@ -33,6 +33,10 @@ name (CaseBlock str i) = "cb_" ++ fromString str ++ "_" ++ showB i
 name (WithBlock str i) = "wb_" ++ fromString str ++ "_" ++ showB i
 name (Resolved i) = assert_total $ idris_crash "unreachable"
 
+jname : JName -> Builder
+jname (Idr n) = name n
+jname (Raw str) = fromString str
+
 primType : PrimType -> Builder
 primType IntType = "Int"
 primType Int8Type = "Int8"
@@ -51,9 +55,7 @@ primType WorldType = "Nothing"
 
 jtype : JType -> Builder
 jtype (PrimTy pty) = primType pty
-jtype NothingTy = "Nothing"
-jtype (VarTy n) = name n
-jtype (CType x) = fromString x
+jtype (VarTy n) = jname n
 
 args : (sep : String) -> (a -> Builder) -> List (a, Maybe JType) -> Builder
 args sep f xs =
@@ -122,8 +124,7 @@ jconst WorldVal = "nothing"
 
 jprimop : Bool -> PrimFn ar -> Vect ar JExpr -> Builder
 
-jexpr p (Var n) = name n
-jexpr p (JName str) = fromString str
+jexpr p (Var n) = jname n
 jexpr p (Annot x ty) = jexpr True x ++ "::" ++ jtype ty
 jexpr p (IsA x ty) = app "isa" [jexpr False x, jtype ty]
 jexpr p (Ty ty) = jtype ty
@@ -141,9 +142,10 @@ jexpr p (IfExpr cond on_true on_false) = paren p $
     jexpr True cond ++ " ? " ++
     jexpr True on_true ++ " : " ++
     jexpr True on_false
+jexpr p (Sequence es) = "(" ++ sepBy "; " (jexpr False <$> forget es) ++ ")"
 jexpr p (Lit cst) = jconst cst
 jexpr p (PrimOp f xs) = jprimop p f xs
-jexpr p NothingVal = "nothing"
+jexpr p (Tuple xs) = "(" ++ sepBy " " ((\x => jexpr False x ++ ",") <$> xs) ++ ")"
 jexpr p (Field x str) = jexpr True x ++ "." ++ fromString str
 jexpr p (Embed x) = paren True $ fromString x
 

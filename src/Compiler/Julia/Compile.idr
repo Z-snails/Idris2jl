@@ -11,11 +11,12 @@ import Data.List1
 import Data.String
 import Data.These
 import Data.Vect
+import Libraries.Data.NameMap
 import Libraries.Data.StringMap
 import Libraries.Data.StringTrie
 
 call : String -> List JExpr -> JExpr
-call fn as = App (JName fn) as
+call fn as = App (Var $ Raw fn) as
 
 requiresLet : NamedCExp -> Bool
 requiresLet (NmLocal {}) = False
@@ -49,36 +50,74 @@ isCompare (GT {}) = True
 isCompare f = False
 
 expr : NamedCExp -> StateT Int (Either (FC, String)) JExpr
+externs : NameMap (List JExpr -> Either String JExpr)
 mkConCase : FC -> JExpr -> List NamedConAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
 mkConstCase : FC -> JExpr -> List NamedConstAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
 
-expr (NmLocal fc n) = pure $ Var n
-expr (NmRef fc n) = pure $ Var n
+expr (NmLocal fc n) = pure $ Var $ Idr n
+expr (NmRef fc n) = pure $ Var $ Idr n
 expr (NmLam fc n y) = pure $ Lam n !(expr y)
 expr (NmLet fc n y z) = pure $ mkLet (n, Nothing, !(expr y)) !(expr z)
 expr (NmApp fc x xs) = pure $ App !(expr x) !(traverse expr xs)
-expr (NmCon fc n NIL tag []) = pure $ JName "nothing"
+expr (NmCon fc n NIL tag []) = pure $ Var $ Raw "nothing"
 expr (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Cons" !(traverse expr xs)
-expr (NmCon fc n inf tag xs) = pure $ App (Var n) !(traverse expr xs)
+expr (NmCon fc n inf tag xs) = pure $ App (Var $ Idr n) !(traverse expr xs)
 expr (NmOp fc f xs) = if isCompare f
     then pure $ call "Int" [PrimOp f !(traverse expr xs)]
     else pure $ PrimOp f !(traverse expr xs)
-expr (NmExtPrim fc p xs) = lift $ Left (fc, "not yet implemented")
+expr (NmExtPrim fc p xs) = case lookup p externs of
+    Just fn => lift $ mapFst (fc,) $ fn !(traverse expr xs)
+    Nothing => lift $ Left (fc, "Unknown primitive: \{show p}")
 expr (NmForce fc lz x) = pure $ call "force" [!(expr x)]
 expr (NmDelay fc lz x) = pure $ Macro "delay" [!(expr x)]
 expr (NmConCase fc sc xs def) = if requiresLet sc
     then do
         v <- MN "sc" <$> state (\x => (x + 1, x))
-        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConCase fc (Var v) xs def)
+        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConCase fc (Var $ Idr v) xs def)
     else mkConCase fc !(expr sc) xs def
 expr (NmConstCase fc sc xs def) = if requiresLet sc
     then do
         v <- MN "sc" <$> state (\x => (x + 1, x))
-        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConstCase fc (Var v) xs def)
+        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConstCase fc (Var $ Idr v) xs def)
     else mkConstCase fc !(expr sc) xs def
 expr (NmPrimVal fc cst) = pure $ Lit cst
-expr (NmErased fc) = pure NothingVal
+expr (NmErased fc) = pure $ Var $ Raw "nothing"
 expr (NmCrash fc str) = pure $ Throw (call "IdrError" [Lit (Str str)])
+
+mkName : (ns : Namespace) -> (n : String) -> Name
+mkName ns n = NS ns $ UN $ Basic n
+
+jPrelude, ioRef, ioArray : Namespace
+jPrelude = mkNamespace "Julia.Prelude"
+ioRef = mkNamespace "Data.IORef"
+ioArray = mkNamespace "Data.IOArray.Prims"
+
+argError : String
+argError = "unexpected argument count"
+
+externs = fromList
+    [ (mkName jPrelude "val", \as => pure $ call "Val" as)
+
+    , (mkName ioRef "prim__newIORef", \case
+        [_, val, w] => pure $ call "Mut" [val]
+        _ => Left argError)
+    , (mkName ioRef "prim__readIORef", \case
+        [_, mut, w] => pure $ Field mut "val"
+        _ => Left argError)
+    , (mkName ioRef "prim__writeIORef", \case
+        [_, mut, val, w] => pure $ call "idris_writeIORef" [mut, val]
+        _ => Left argError)
+
+    , (mkName ioArray "prim__newArray", \case
+        [_, n, val, w] => pure $ call "idris_newArray" [n, val]
+        _ => Left argError)
+    , (mkName ioArray "prim__arrayGet", \case
+        [_, arr, idx, w] => pure $ call "idris_arrayGet" [arr, idx]
+        _ => Left argError)
+    , (mkName ioArray "prim__arraySet", \case
+        [_, arr, idx, val, w] => pure $ call "idris_arraySet!" [arr, idx, val]
+        _ => Left argError)
+    ]
 
 bindAll : JExpr -> Nat -> List Name -> JExpr -> JExpr
 bindAll sc k [] e = e
@@ -91,7 +130,7 @@ mkConCase fc sc (MkNConAlt n inf _ as e :: xs) def =
             (NIL, []) => IfExpr (call "isnothing" [sc]) e
             (CONS, [fst, snd]) => IfExpr (call "notnothing" [sc])
                 (Let ((fst, Nothing, Field sc "fst") ::: [(snd, Nothing, Field sc "snd")]) e)
-            _ => IfExpr (sc `IsA` (VarTy n))
+            _ => IfExpr (sc `IsA` (VarTy $ Idr n))
                 (bindAll sc 0 as e)
     in pure $ f !(expr e) !(mkConCase fc sc xs def)
 
@@ -103,7 +142,7 @@ mkConstCase fc sc (MkNConstAlt v e :: xs) def =
         !(mkConstCase fc sc xs def)
 
 juliaType : CFType -> Maybe JType
-juliaType CFUnit = Just NothingTy
+juliaType CFUnit = Just $ VarTy $ Raw "Nothing"
 juliaType CFInt = Just $ PrimTy IntType
 juliaType CFInteger = Just $ PrimTy IntegerType
 juliaType CFInt8 = Just $ PrimTy Int8Type
@@ -121,15 +160,15 @@ juliaType CFPtr = Just voidPtr
 juliaType CFGCPtr = Just voidPtr
 juliaType CFBuffer = Nothing
 juliaType CFForeignObj = Nothing
-juliaType CFWorld = Just NothingTy
-juliaType (CFFun x y) = Just $ CType "Function"
+juliaType CFWorld = Just $ VarTy $ Raw "Nothing"
+juliaType (CFFun x y) = Just $ VarTy $ Raw "Function"
 juliaType (CFIORes x) = juliaType x
 juliaType (CFStruct str xs) = Nothing
 juliaType (CFUser n xs) = Nothing
 
 cType : CFType -> Either String JType
-cType CFUnit = pure $ CType "Cvoid"
-cType CFInt = pure $ CType "Cint"
+cType CFUnit = pure $ VarTy $ Raw "Cvoid"
+cType CFInt = pure $ VarTy $ Raw "Cint"
 cType CFInteger = Left "unsupported type in julia foreign function interface: Integer"
 cType CFInt8 = pure $ PrimTy Int8Type
 cType CFInt16 = pure $ PrimTy Int16Type
@@ -139,14 +178,14 @@ cType CFUnsigned8 = pure $ PrimTy Bits8Type
 cType CFUnsigned16 = pure $ PrimTy Bits16Type
 cType CFUnsigned32 = pure $ PrimTy Bits32Type
 cType CFUnsigned64 = pure $ PrimTy Bits64Type
-cType CFString = pure $ CType "Cstring"
-cType CFDouble = pure $ CType "double"
+cType CFString = pure $ VarTy $ Raw "Cstring"
+cType CFDouble = pure $ VarTy $ Raw "double"
 cType CFChar = pure $ PrimTy CharType
 cType CFPtr = pure voidPtr
 cType CFGCPtr = pure voidPtr
-cType CFBuffer = pure $ CType "Buffer"
+cType CFBuffer = pure $ VarTy $ Raw "Buffer"
 cType CFForeignObj = pure voidPtr
-cType CFWorld = pure NothingTy
+cType CFWorld = pure $ VarTy $ Raw "Nothing"
 cType (CFFun x y) = pure voidPtr
 cType (CFIORes x) = cType x
 cType (CFStruct str xs) = Left "unsupported type in julia foreign function interface: struct"
@@ -182,7 +221,7 @@ knownForeign n inl (cc :: ccs) = try (trim cc) <|> knownForeign n inl ccs
          in MkFun n inl
                 ((\(i, ty) => (MN "arg" $ cast i, ty)) <$> as)
                 Nothing
-                $ call fn ((\(i, _) => Var $ MN "arg" $ cast i) <$> as)
+                $ call fn ((\(i, _) => Var $ Idr $ MN "arg" $ cast i) <$> as)
 
     try : String -> Maybe (Fun, List String)
     try "scheme:blodwen-new-buffer" =
@@ -212,13 +251,13 @@ foreign fc n inl ccs args ret = do
         Just ("julia", opts) =>  do
             let (imps, expr) = unsnoc opts
             imps <- traverse (parseImport fc) imps
-            pure (Fun.untyped n inl (fst <$> args) Nothing (App (Embed expr) (Var . fst <$> args)), imps)
+            pure (Fun.untyped n inl (fst <$> args) Nothing (App (Embed expr) (Var . Idr . fst <$> args)), imps)
 
         Just ("C", opts) => do
             fun <- case opts of
-                    fun ::: [] => Right $ JName fun
+                    fun ::: [] => Right $ Var $ Raw fun
                     fun ::: lib :: _ => Right $ Field (call "joinpath" [Macro "__DIR__" [], Lit $ Str lib]) fun
-            cargs <- traverse (\(v, ty) => pure $ Annot (Var v) !(mapFst (GenericMsg fc) (cType ty)))
+            cargs <- traverse (\(v, ty) => pure $ Annot (Var $ Idr v) !(mapFst (GenericMsg fc) (cType ty)))
                 $ filter (\(_, ty) => case ty of {CFWorld => False; _ => True}) args
             let call = Macro "ccall" [App fun cargs `Annot` !(mapFst (GenericMsg fc) (cType ret))]
                 call = case ret of

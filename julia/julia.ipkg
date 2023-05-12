@@ -1,9 +1,9 @@
-package simd-jl
+package julia
 version = 0.1.0
 authors = "Zoe Stafford"
 -- maintainers =
 -- license =
--- brief =
+brief = "julia specific functions"
 -- readme =
 -- homepage =
 -- sourceloc =
@@ -16,7 +16,7 @@ authors = "Zoe Stafford"
 -- depends =
 
 -- modules to install
-modules = Julia.Simd
+modules = Julia.Prelude, Julia.Simd
 
 -- main file (i.e. file to load at REPL)
 -- main = Main

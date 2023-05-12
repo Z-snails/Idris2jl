@@ -8,6 +8,7 @@ import Compiler.Common
 import Compiler.Generated
 import Libraries.Utils.Path
 import Libraries.Data.String.Builder
+import Data.Vect
 import Idris.Syntax
 import Idris.Version
 import System
@@ -61,11 +62,11 @@ macro delay(x)
 end
 
 function force(x::Delay)
-    if isnothing(x.gen)
+    if isnothing(@atomic x.gen)
         return x.val
     else
-        @atomic x.val = x.gen()
-        x.gen = nothing
+        x.val = x.gen()
+        @atomic x.gen = nothing
         return x.val
     end
 end
@@ -125,10 +126,17 @@ function idris_fork(k)
     return Base.Threads.@spawn $k()
 end
 
-function idris_wait(thread)
-    wait(thread)
-    return
+idris_wait(thread) = (wait(thread); nothing)
+
+mutable struct Mut
+    val
 end
+
+@inline idris_writeIORef(mut::Mut, val) = (mut.val = val; nothing)
+
+idris_newArray(n, val) = fill!(Vector{Any}(undef, n), val)
+@inline idris_arrayGet(arr, idx) = arr[idx + 1]
+@inline idris_arraySet(arr, idx, val) = (arr[idx + 1] = val; nothing)
 
 """
 
@@ -160,12 +168,62 @@ copySupportSO = do
 getImport : String -> Builder
 getImport str = "import " ++ fromString str
 
+renameMain : Name -> Name
+renameMain (NS mi n) = NS (renameMainNS mi) (renameMain n)
+  where
+    renameMainNS : Namespace -> Namespace
+    renameMainNS = unsafeFoldNamespace . map (\n => if n == "Main" then "_Main" else n) . unsafeUnfoldNamespace
+
+renameMain (UN un) = UN un
+renameMain (MN str i) = MN str i
+renameMain (PV n i) = PV (renameMain n) i
+renameMain (DN str n) = DN str (renameMain n)
+renameMain (Nested x n) = Nested x (renameMain n)
+renameMain (CaseBlock str i) = CaseBlock str i
+renameMain (WithBlock str i) = WithBlock str i
+renameMain (Resolved i) = Resolved i
+
+renameMainExp : NamedCExp -> NamedCExp
+renameMainExp (NmLocal fc n1) = NmLocal fc n1 -- locals have not namespaces
+renameMainExp (NmRef fc n1) = NmRef fc (renameMain n1)
+renameMainExp (NmLam fc x y) = NmLam fc x (renameMainExp y)
+renameMainExp (NmLet fc x y z) = NmLet fc x (renameMainExp y) (renameMainExp z)
+renameMainExp (NmApp fc x xs) = NmApp fc (renameMainExp x) (renameMainExp <$> xs)
+renameMainExp (NmCon fc n1 x tag xs) = NmCon fc (renameMain n1) x tag (renameMainExp <$> xs)
+renameMainExp (NmOp fc f xs) = NmOp fc f (renameMainExp <$> xs)
+renameMainExp (NmExtPrim fc p xs) = NmExtPrim fc p (renameMainExp <$> xs)
+    -- ^ primitive name should be preserved, as this isn't lowered to julia
+renameMainExp (NmForce fc lz x) = NmForce fc lz (renameMainExp x)
+renameMainExp (NmDelay fc lz x) = NmDelay fc lz (renameMainExp x)
+renameMainExp (NmConCase fc sc xs x) =
+    NmConCase fc (renameMainExp sc)
+        (map (\(MkNConAlt n i tag args exp) => MkNConAlt (renameMain n) i tag args (renameMainExp exp)) xs)
+        (renameMainExp <$> x)
+renameMainExp (NmConstCase fc sc xs x) = 
+    NmConstCase fc (renameMainExp sc)
+        (map (\(MkNConstAlt val exp) => MkNConstAlt val (renameMainExp exp)) xs)
+        (renameMainExp <$> x)
+renameMainExp e@(NmPrimVal {}) = e
+renameMainExp e@(NmErased {}) = e
+renameMainExp e@(NmCrash {}) = e
+
+renameMainDef : (Name, FC, NamedDef) -> (Name, FC, NamedDef)
+renameMainDef (n, fc, def) = (renameMain n, fc, renameMainDef' def)
+  where
+    renameMainDef' : NamedDef -> NamedDef
+    renameMainDef' (MkNmFun args x) = MkNmFun args (renameMainExp x)
+    renameMainDef' (MkNmCon tag arity nt) = MkNmCon tag arity nt
+    renameMainDef' (MkNmForeign ccs fargs ret) = MkNmForeign ccs fargs ret
+    renameMainDef' (MkNmError x) = MkNmError (renameMainExp x)
+
 compile : Ref Ctxt Defs -> Ref Syn SyntaxInfo -> String -> String -> ClosedTerm -> String -> Core (Maybe String)
 compile _ _ outDir tmpDir tm exe = do
     let outFile = outDir </> exe
     cdata <- getCompileData False Cases tm
-    let decls = declare cdata.namedDefs
-    (ds, imps) <- unzip <$> traverse Compile.def ((mainName, EmptyFC, MkNmFun [] (forget cdata.mainExpr)) :: cdata.namedDefs)
+    let ndefs = renameMainDef <$> cdata.namedDefs
+    let mainExpr = renameMainExp $ forget cdata.mainExpr
+    let decls = declare ndefs
+    (ds, imps) <- unzip <$> traverse Compile.def ((mainName, EmptyFC, MkNmFun [] mainExpr) :: ndefs)
     let ds = build $ sepBy "\n"
             [ fromString header
             , sepBy "\n" $ getImport <$> nub (join imps)

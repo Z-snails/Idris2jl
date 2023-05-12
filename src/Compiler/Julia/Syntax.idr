@@ -6,17 +6,20 @@ import Data.List1
 import Data.Vect
 
 public export
+data JName : Type where
+    Idr : Name -> JName
+    Raw : String -> JName
+
+public export
 data JType : Type where
     PrimTy : PrimType -> JType
-    NothingTy : JType
-    VarTy : Name -> JType
-    CType : String -> JType
+    VarTy : JName -> JType
 
 %name JType ty
 
 export
 voidPtr : JType
-voidPtr = CType "Ptr{Cvoid}"
+voidPtr = VarTy $ Raw "Ptr{Cvoid}"
 
 export
 intType : JType
@@ -34,10 +37,14 @@ namespace Struct
     untyped name args = MkStruct { name, args = map (, Nothing) args }
 
 public export
+data Pattern : Type where
+    PVar : JName -> Pattern
+    PTuple : List Pattern -> Pattern
+
+public export
 data JExpr : Type where
     -- variables
-    Var : Name -> JExpr
-    JName : String -> JExpr
+    Var : JName -> JExpr
 
     -- types
     Annot : JExpr -> JType -> JExpr
@@ -51,13 +58,14 @@ data JExpr : Type where
     Let : List1 (Name, Maybe JType, JExpr) -> JExpr -> JExpr
     Throw : JExpr -> JExpr
     IfExpr : (cond : JExpr) -> (on_true : JExpr) -> (on_false : JExpr) -> JExpr
+    Sequence : List1 JExpr -> JExpr
 
     -- primitives
     Lit : Constant -> JExpr
     PrimOp : PrimFn ar -> Vect ar JExpr -> JExpr
+    Tuple : List JExpr -> JExpr
 
     -- misc
-    NothingVal : JExpr
     Field : JExpr -> String -> JExpr
     Embed : String -> JExpr
 
