@@ -62,10 +62,11 @@ macro delay(x)
 end
 
 function force(x::Delay)
-    if isnothing(@atomic x.gen)
+    gen = @atomic x.gen
+    if isnothing(gen)
         return x.val
     else
-        x.val = x.gen()
+        x.val = gen()
         @atomic x.gen = nothing
         return x.val
     end
