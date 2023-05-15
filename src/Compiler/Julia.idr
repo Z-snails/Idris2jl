@@ -5,7 +5,6 @@ import Core.Context
 import Core.Core
 import Core.Name
 import Compiler.Common
-import Compiler.Generated
 import Libraries.Utils.Path
 import Libraries.Data.String.Builder
 import Data.Vect
@@ -14,132 +13,11 @@ import Idris.Version
 import System
 import System.File
 import Compiler.Julia.Compile
+import Compiler.Julia.Header
 import Compiler.Julia.Printer
 import Compiler.Julia.Syntax
+import Compiler.Julia.TailRec
 import Compiler.Julia.Utils
-
-header : String
-header = """
-#!/bin/env julia
-# \{generatedString "julia"}
-
-function believe_me(x)
-    return x
-end
-
-struct Unreachable <: Exception
-    location::String
-end
-
-macro unreachable(location)
-    :(throw(Unreachable($(esc(location)))))
-end
-
-# From Integer
-idris_cast(::Type{to}, x::Integer) where { to <: Integer } = unsafe_trunc(to, x)
-idris_cast(::Type{String}, x::Integer) = string(x)
-idris_cast(::Type{to}, x::Integer) where { to <: AbstractFloat } = convert(to, x)
-
-# From Float
-idris_cast(::Type{to}, x::AbstractFloat) where { to <: Integer } = unsafe_trunc(to, x)
-idris_cast(::Type{String}, x::AbstractFloat) = string(x)
-
-# From Char
-idris_cast(::Type{String}, x::Char) = string(x)
-idris_cast(::Type{to}, x::Char) where { to <: Integer } = convert(to, x)
-
-# From String
-idris_cast(::Type{to}, x::String) where { to <: Integer } = parse(to, x)
-idris_cast(::Type{Float64}, x::String) = parse(Float64, x)
-
-mutable struct Delay
-    @atomic gen::Union{Function,Nothing}
-    val::Union{Any,Nothing}
-end
-
-macro delay(x)
-    :(Delay(() -> $(esc(x)), nothing))
-end
-
-function force(x::Delay)
-    gen = @atomic x.gen
-    if isnothing(gen)
-        return x.val
-    else
-        x.val = gen()
-        @atomic x.gen = nothing
-        return x.val
-    end
-end
-
-function idris_crash(msg::String)
-    print(stderr, msg)
-    exit(1)
-end
-
-struct Buffer
-    ptr::Ptr{Cvoid}
-end
-
-Base.cconvert(::Type{Ptr{Cvoid}}, x::Buffer) = x.ptr
-
-@inline notnothing(x) = !isnothing(x)
-
-struct Cons
-    fst
-    snd
-end
-
-function idris_fastUnpack(x::AbstractString)
-    acc = nothing
-    for c in Iterators.reverse(x)
-        acc = Cons(c, acc)
-    end
-    return acc
-end
-
-function idris_listPrint(::Type{T}, xs::Union{Cons,Nothing}) where {T}
-    xs::Union{Cons,Nothing} = xs
-    if isnothing(xs)
-        return ""
-    else
-        io = IOBuffer()
-        while !isnothing(xs)
-            print(io, xs.fst::T)
-            xs = xs.snd::Union{Cons,Nothing}
-        end
-        return String(take!(io))
-    end
-end
-
-@inline function idris_fastPack(xs::Union{Cons,Nothing})
-    return idris_listPrint(Char, xs)
-end
-
-@inline function idris_fastConcat(xs::Union{Cons,Nothing})
-    return idris_listPrint(String, xs)
-end
-
-@inline idris_isNull(x::Ptr) = x == C_NULL
-@inline idris_getNull() = Ptr{Cvoid}(C_NULL)
-
-function idris_fork(k)
-    return Base.Threads.@spawn $k()
-end
-
-idris_wait(thread) = (wait(thread); nothing)
-
-mutable struct Mut
-    val
-end
-
-@inline idris_writeIORef(mut::Mut, val) = (mut.val = val; nothing)
-
-idris_newArray(n, val) = fill!(Vector{Any}(undef, n), val)
-@inline idris_arrayGet(arr, idx) = arr[idx + 1]
-@inline idris_arraySet(arr, idx, val) = (arr[idx + 1] = val; nothing)
-
-"""
 
 mainName : Name
 mainName = MN "main" 0
@@ -222,14 +100,17 @@ compile _ _ outDir tmpDir tm exe = do
     let outFile = outDir </> exe
     cdata <- getCompileData False Cases tm
     let ndefs = renameMainDef <$> cdata.namedDefs
-    let mainExpr = renameMainExp $ forget cdata.mainExpr
-    let decls = declare ndefs
-    (ds, imps) <- unzip <$> traverse Compile.def ((mainName, EmptyFC, MkNmFun [] mainExpr) :: ndefs)
+        mainExpr = renameMainExp $ forget cdata.mainExpr
+        decls = declare ndefs
+        Just gs = mkCallGroups ((mainName, EmptyFC, MkNmFun [] mainExpr) :: ndefs)
+            | Nothing => unreachable (__LOC__)
+    _ <- newRef GroupNum 0
+    (fs, imps) <- unzip <$> traverse Compile.group gs
     let ds = build $ sepBy "\n"
             [ fromString header
             , sepBy "\n" $ getImport <$> nub (join imps)
             , sepBy "\n" $ jstmt <$> decls
-            , sepBy "\n" $ mapMaybe (map jstmt) ds
+            , sepBy "\n" $ fs >>= map jstmt
             , footer
             ]
     writeFile outFile ds

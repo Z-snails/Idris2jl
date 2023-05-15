@@ -8,18 +8,39 @@ import Data.Vect
 public export
 data JName : Type where
     Idr : Name -> JName
+    Lbl : Name -> JName
     Raw : String -> JName
+
+export
+FromString JName where
+    fromString = Raw
+
+export
+Show JName where
+    show (Idr n) = show n
+    show (Lbl n) = show n
+    show (Raw n) = n
+
+export
+underscore : JName
+underscore = Idr $ UN Underscore
+
+export
+asLabel : JName -> JName
+asLabel (Idr n) = Lbl n
+asLabel n = n
 
 public export
 data JType : Type where
     PrimTy : PrimType -> JType
     VarTy : JName -> JType
+    AppTy : JName -> List JType -> JType
 
 %name JType ty
 
 export
 voidPtr : JType
-voidPtr = VarTy $ Raw "Ptr{Cvoid}"
+voidPtr = AppTy "Ptr" [VarTy "Cvoid"]
 
 export
 intType : JType
@@ -38,7 +59,7 @@ namespace Struct
 
 public export
 data Pattern : Type where
-    PVar : JName -> Pattern
+    PVar : JName -> Maybe JType -> Pattern
     PTuple : List Pattern -> Pattern
 
 public export
@@ -55,10 +76,11 @@ data JExpr : Type where
     App : JExpr -> List JExpr -> JExpr
     Macro : String -> List JExpr -> JExpr
     Lam : Name -> JExpr -> JExpr
-    Let : List1 (Name, Maybe JType, JExpr) -> JExpr -> JExpr
+    Let : List1 (Pattern, JExpr) -> JExpr -> JExpr
     Throw : JExpr -> JExpr
     IfExpr : (cond : JExpr) -> (on_true : JExpr) -> (on_false : JExpr) -> JExpr
     Sequence : List1 JExpr -> JExpr
+    And : JExpr -> JExpr -> JExpr
 
     -- primitives
     Lit : Constant -> JExpr
@@ -68,25 +90,32 @@ data JExpr : Type where
     -- misc
     Field : JExpr -> String -> JExpr
     Embed : String -> JExpr
+    Assign : Pattern -> JExpr -> JExpr
+    Quote : JExpr -> JExpr
 
 public export
 mkLet : (Name, Maybe JType, JExpr) -> JExpr -> JExpr
-mkLet x (Let ys e) = Let (x ::: forget ys) e
-mkLet x e = Let (singleton x) e
+mkLet (n, mty, e) (Let ys sc) = Let ((PVar (Idr n) mty, e) ::: forget ys) sc
+mkLet (n, mty, e) sc = Let (singleton (PVar (Idr n) mty, e)) sc
+
+export
+isEqual : JExpr -> JExpr -> JExpr
+isEqual x y = PrimOp (EQ IntType) [x, y]
 
 public export
 record Fun where
     constructor MkFun
-    name : Name
+    name : JName
     inline : InlineOk
-    args : List (Name, Maybe JType)
-    varargs : Maybe Name
+    args : List (JName, Maybe JType)
+    varargs : Maybe JName
     body : JExpr
+    whereBlock : List (JName, Maybe JType)
 
 namespace Fun
     public export
-    untyped : Name -> InlineOk -> List Name -> Maybe Name -> JExpr -> Fun
-    untyped n inl ns va x = MkFun n inl (map (, Nothing) ns) va x
+    untyped : JName -> InlineOk -> List JName -> Maybe JName -> JExpr -> Fun
+    untyped n inl ns va x = MkFun n inl (map (, Nothing) ns) va x []
 
 public export
 data Stmt : Type where

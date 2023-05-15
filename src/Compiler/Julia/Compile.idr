@@ -1,6 +1,7 @@
 module Compiler.Julia.Compile
 
 import Compiler.Julia.Syntax
+import Compiler.Julia.TailRec
 import Compiler.Julia.Utils
 import Control.Monad.State
 import Core.CompileExpr
@@ -12,6 +13,7 @@ import Data.String
 import Data.These
 import Data.Vect
 import Libraries.Data.NameMap
+import Libraries.Data.SortedSet
 import Libraries.Data.StringMap
 import Libraries.Data.StringTrie
 
@@ -49,41 +51,6 @@ isCompare (GTE {}) = True
 isCompare (GT {}) = True
 isCompare f = False
 
-expr : NamedCExp -> StateT Int (Either (FC, String)) JExpr
-externs : NameMap (List JExpr -> Either String JExpr)
-mkConCase : FC -> JExpr -> List NamedConAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
-mkConstCase : FC -> JExpr -> List NamedConstAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
-
-expr (NmLocal fc n) = pure $ Var $ Idr n
-expr (NmRef fc n) = pure $ Var $ Idr n
-expr (NmLam fc n y) = pure $ Lam n !(expr y)
-expr (NmLet fc n y z) = pure $ mkLet (n, Nothing, !(expr y)) !(expr z)
-expr (NmApp fc x xs) = pure $ App !(expr x) !(traverse expr xs)
-expr (NmCon fc n NIL tag []) = pure $ Var $ Raw "nothing"
-expr (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Cons" !(traverse expr xs)
-expr (NmCon fc n inf tag xs) = pure $ App (Var $ Idr n) !(traverse expr xs)
-expr (NmOp fc f xs) = if isCompare f
-    then pure $ call "Int" [PrimOp f !(traverse expr xs)]
-    else pure $ PrimOp f !(traverse expr xs)
-expr (NmExtPrim fc p xs) = case lookup p externs of
-    Just fn => lift $ mapFst (fc,) $ fn !(traverse expr xs)
-    Nothing => lift $ Left (fc, "Unknown primitive: \{show p}")
-expr (NmForce fc lz x) = pure $ call "force" [!(expr x)]
-expr (NmDelay fc lz x) = pure $ Macro "delay" [!(expr x)]
-expr (NmConCase fc sc xs def) = if requiresLet sc
-    then do
-        v <- MN "sc" <$> state (\x => (x + 1, x))
-        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConCase fc (Var $ Idr v) xs def)
-    else mkConCase fc !(expr sc) xs def
-expr (NmConstCase fc sc xs def) = if requiresLet sc
-    then do
-        v <- MN "sc" <$> state (\x => (x + 1, x))
-        pure $ Let (singleton (v, Nothing, !(expr sc))) !(mkConstCase fc (Var $ Idr v) xs def)
-    else mkConstCase fc !(expr sc) xs def
-expr (NmPrimVal fc cst) = pure $ Lit cst
-expr (NmErased fc) = pure $ Var $ Raw "nothing"
-expr (NmCrash fc str) = pure $ Throw (call "IdrError" [Lit (Str str)])
-
 mkName : (ns : Namespace) -> (n : String) -> Name
 mkName ns n = NS ns $ UN $ Basic n
 
@@ -95,6 +62,10 @@ ioArray = mkNamespace "Data.IOArray.Prims"
 argError : String
 argError = "unexpected argument count"
 
+tailArgs : JName
+tailArgs = Idr $ MN "args" 0
+
+externs : NameMap (List JExpr -> Either String JExpr)
 externs = fromList
     [ (mkName jPrelude "val", \as => pure $ call "Val" as)
 
@@ -119,30 +90,75 @@ externs = fromList
         _ => Left argError)
     ]
 
-bindAll : JExpr -> Nat -> List Name -> JExpr -> JExpr
-bindAll sc k [] e = e
-bindAll sc k (n :: ns) e = mkLet (n, Nothing, Field sc "v\{show k}") (bindAll sc (S k) ns e)
+parameters (canTail : Name -> Bool)
+    expr : (tailPos : Bool) -> NamedCExp -> StateT Int (Either (FC, String)) JExpr
+    mkConCase : (tailPos : Bool) -> FC -> JExpr -> List NamedConAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
+    mkConstCase : (tailPos : Bool) -> FC -> JExpr -> List NamedConstAlt -> Maybe NamedCExp -> StateT Int (Either (FC, String)) JExpr
 
-mkConCase fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
-mkConCase fc sc [] (Just def) = expr def
-mkConCase fc sc (MkNConAlt n inf _ as e :: xs) def =
-    let f = \e => case (inf, as) of
-            (NIL, []) => IfExpr (call "isnothing" [sc]) e
-            (CONS, [fst, snd]) => IfExpr (call "notnothing" [sc])
-                (Let ((fst, Nothing, Field sc "fst") ::: [(snd, Nothing, Field sc "snd")]) e)
-            _ => IfExpr (sc `IsA` (VarTy $ Idr n))
-                (bindAll sc 0 as e)
-    in pure $ f !(expr e) !(mkConCase fc sc xs def)
+    expr _ (NmLocal fc n) = pure $ Var $ Idr n
+    expr _ (NmRef fc n) = pure $ Var $ Idr n
+    expr _ (NmLam fc n y) = pure $ Lam n !(expr False y)
+    expr tp (NmLet fc n y z) = pure $ mkLet (n, Nothing, !(expr False y)) !(expr tp z)
+    expr tp (NmApp fc f@(NmRef _ n) xs) =
+        if canTail n
+            then pure $ Sequence
+                $ Assign (PVar tailArgs Nothing) (Tuple !(traverse (expr False) xs))
+                ::: [Macro "goto" [Var $ Lbl n]]
+            else pure $ App !(expr False f) !(traverse (expr False) xs)
+    expr _ (NmApp fc x xs) = pure $ App !(expr False x) !(traverse (expr False) xs)
+    -- expr _ (NmCon fc n NIL tag []) = pure $ Var "nothing"
+    -- expr _ (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Cons" !(traverse (expr False) xs)
+    expr _ (NmCon fc n inf tag xs) = pure $ App (Var $ Idr n) !(traverse (expr False) xs)
+    expr _ (NmOp fc f xs) = if isCompare f
+        then pure $ call "Int" [PrimOp f !(traverse (expr False) xs)]
+        else pure $ PrimOp f !(traverse (expr False) xs)
+    expr _ (NmExtPrim fc p xs) = case lookup p externs of
+        Just fn => lift $ mapFst (fc,) $ fn !(traverse (expr False) xs)
+        Nothing => lift $ Left (fc, "Unknown primitive: \{show p}")
+    expr _ (NmForce fc lz x) = pure $ call "force" [!(expr False x)]
+    expr _ (NmDelay fc lz x) = pure $ Macro "delay" [!(expr False x)]
+    expr _ (NmConCase fc sc xs def) = if requiresLet sc
+        then do
+            v <- MN "sc" <$> state (\x => (x + 1, x))
+            pure $ mkLet
+                (v, Nothing, !(expr False sc))
+                !(mkConCase False fc (Var $ Idr v) xs def)
+        else mkConCase False fc !(expr False sc) xs def
+    expr _ (NmConstCase fc sc xs def) = if requiresLet sc
+        then do
+            v <- MN "sc" <$> state (\x => (x + 1, x))
+            pure $ mkLet
+                (v, Nothing, !(expr False sc))
+                !(mkConstCase False fc (Var $ Idr v) xs def)
+        else mkConstCase False fc !(expr False sc) xs def
+    expr _ (NmPrimVal fc cst) = pure $ Lit cst
+    expr _ (NmErased fc) = pure $ Var "nothing"
+    expr _ (NmCrash fc str) = pure $ Throw (call "IdrError" [Lit (Str str)])
 
-mkConstCase fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
-mkConstCase fc sc [] (Just def) = expr def
-mkConstCase fc sc (MkNConstAlt v e :: xs) def =
-    pure $ IfExpr (PrimOp (EQ (typeOf v)) [sc, Lit v])
-        !(expr e)
-        !(mkConstCase fc sc xs def)
+    bindAll : JExpr -> Nat -> List Name -> JExpr -> JExpr
+    bindAll sc k [] e = e
+    bindAll sc k (n :: ns) e = mkLet (n, Nothing, Field sc "v\{show k}") (bindAll sc (S k) ns e)
+
+    mkConCase _ fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
+    mkConCase tp fc sc [] (Just def) = expr tp def
+    mkConCase tp fc sc (MkNConAlt n inf _ as e :: xs) def =
+        let f = \e => case (inf, as) of
+                -- (NIL, []) => IfExpr (call "isnothing" [sc]) e
+                -- (CONS, [fst, snd]) => IfExpr (call "notnothing" [sc])
+                --     (Let ((PVar fst Nothing, Field sc "fst") ::: [(PVar snd Nothing, Field sc "snd")]) e)
+                _ => IfExpr (sc `IsA` (VarTy $ Idr n))
+                    (bindAll sc 0 as e)
+        in pure $ f !(expr tp e) !(mkConCase tp fc sc xs def)
+
+    mkConstCase _ fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
+    mkConstCase tp fc sc [] (Just def) = expr tp def
+    mkConstCase tp fc sc (MkNConstAlt v e :: xs) def =
+        pure $ IfExpr (PrimOp (EQ (typeOf v)) [sc, Lit v])
+            !(expr tp e)
+            !(mkConstCase tp fc sc xs def)
 
 juliaType : CFType -> Maybe JType
-juliaType CFUnit = Just $ VarTy $ Raw "Nothing"
+juliaType CFUnit = Just $ VarTy "Nothing"
 juliaType CFInt = Just $ PrimTy IntType
 juliaType CFInteger = Just $ PrimTy IntegerType
 juliaType CFInt8 = Just $ PrimTy Int8Type
@@ -160,15 +176,15 @@ juliaType CFPtr = Just voidPtr
 juliaType CFGCPtr = Just voidPtr
 juliaType CFBuffer = Nothing
 juliaType CFForeignObj = Nothing
-juliaType CFWorld = Just $ VarTy $ Raw "Nothing"
-juliaType (CFFun x y) = Just $ VarTy $ Raw "Function"
+juliaType CFWorld = Just $ VarTy "Nothing"
+juliaType (CFFun x y) = Just $ VarTy "Function"
 juliaType (CFIORes x) = juliaType x
 juliaType (CFStruct str xs) = Nothing
 juliaType (CFUser n xs) = Nothing
 
 cType : CFType -> Either String JType
-cType CFUnit = pure $ VarTy $ Raw "Cvoid"
-cType CFInt = pure $ VarTy $ Raw "Cint"
+cType CFUnit = pure $ VarTy "Cvoid"
+cType CFInt = pure $ VarTy "Cint"
 cType CFInteger = Left "unsupported type in julia foreign function interface: Integer"
 cType CFInt8 = pure $ PrimTy Int8Type
 cType CFInt16 = pure $ PrimTy Int16Type
@@ -178,14 +194,14 @@ cType CFUnsigned8 = pure $ PrimTy Bits8Type
 cType CFUnsigned16 = pure $ PrimTy Bits16Type
 cType CFUnsigned32 = pure $ PrimTy Bits32Type
 cType CFUnsigned64 = pure $ PrimTy Bits64Type
-cType CFString = pure $ VarTy $ Raw "Cstring"
-cType CFDouble = pure $ VarTy $ Raw "double"
+cType CFString = pure $ VarTy "Cstring"
+cType CFDouble = pure $ VarTy "double"
 cType CFChar = pure $ PrimTy CharType
 cType CFPtr = pure voidPtr
 cType CFGCPtr = pure voidPtr
-cType CFBuffer = pure $ VarTy $ Raw "Buffer"
+cType CFBuffer = pure $ VarTy "Buffer"
 cType CFForeignObj = pure voidPtr
-cType CFWorld = pure $ VarTy $ Raw "Nothing"
+cType CFWorld = pure $ VarTy "Nothing"
 cType (CFFun x y) = pure voidPtr
 cType (CFIORes x) = cType x
 cType (CFStruct str xs) = Left "unsupported type in julia foreign function interface: struct"
@@ -218,10 +234,10 @@ knownForeign n inl (cc :: ccs) = try (trim cc) <|> knownForeign n inl ccs
     callSupport : InlineOk -> List (Maybe JType) -> String -> Fun
     callSupport inl tys fn =
         let as = enumerate tys
-         in MkFun n inl
-                ((\(i, ty) => (MN "arg" $ cast i, ty)) <$> as)
+         in MkFun (Idr n) inl
+                ((\(i, ty) => (Idr $ MN "arg" $ cast i, ty)) <$> as)
                 Nothing
-                $ call fn ((\(i, _) => Var $ Idr $ MN "arg" $ cast i) <$> as)
+                (call fn ((\(i, _) => Var $ Idr $ MN "arg" $ cast i) <$> as)) []
 
     try : String -> Maybe (Fun, List String)
     try "scheme:blodwen-new-buffer" =
@@ -251,7 +267,7 @@ foreign fc n inl ccs args ret = do
         Just ("julia", opts) =>  do
             let (imps, expr) = unsnoc opts
             imps <- traverse (parseImport fc) imps
-            pure (Fun.untyped n inl (fst <$> args) Nothing (App (Embed expr) (Var . Idr . fst <$> args)), imps)
+            pure (Fun.untyped (Idr n) inl (Idr . fst <$> args) Nothing (App (Embed expr) (Var . Idr . fst <$> args)), imps)
 
         Just ("C", opts) => do
             fun <- case opts of
@@ -263,7 +279,7 @@ foreign fc n inl ccs args ret = do
                 call = case ret of
                     CFString => Compile.call "idris_from_Cstring" [call]
                     _ => call
-            pure (MkFun n inl (map (\(i, ty) => (i, juliaType ty)) args) Nothing call, [])
+            pure (MkFun (Idr n) inl (map (\(i, ty) => (Idr i, juliaType ty)) args) Nothing call [], [])
 
         _ => Left $ NoForeignCC fc ccs
 
@@ -278,14 +294,82 @@ inlineable n = case !(lookupCtxtExact n $ gamma !(get Ctxt)) of
         else pure NotInline
     Nothing => pure NotInline
 
+singleDef : Ref Ctxt Defs => (canTail : Name -> Bool) -> (Name, FC, NamedDef) -> Core (Maybe Stmt, List String)
+singleDef canTail (n, _, MkNmFun args x) = pure (Just $ JFun $ Fun.untyped (Idr n) !(inlineable n) (map Idr args) Nothing
+    !(liftEither $ mkGenericMsg $ evalStateT 0 (expr canTail True x)), [])
+singleDef _ (n, _, MkNmCon tag arity nt) = pure (Nothing, [])
+singleDef _ (n, fc, MkNmForeign ccs fargs ret) = mapFst (Just . JFun) <$> liftEither (foreign fc n !(inlineable n) ccs fargs ret)
+singleDef _ (n, _, MkNmError x) = pure (Just $ JFun $ Fun.untyped (Idr n) !(inlineable n) [] (Just $ Idr $ UN Underscore)
+    !(liftEither $ mkGenericMsg $ evalStateT 0 (expr (const False) True x)), [])
+
 export
-def : Ref Ctxt Defs => (Name, FC, NamedDef) -> Core (Maybe Stmt, List String)
-def (n, _, MkNmFun args x) = pure (Just $ JFun $ Fun.untyped n !(inlineable n) args Nothing
-    !(liftEither $ mkGenericMsg $ evalStateT 0 (expr x)), [])
-def (n, _, MkNmCon tag arity nt) = pure (Nothing, [])
-def (n, fc, MkNmForeign ccs fargs ret) = mapFst (Just . JFun) <$> liftEither (foreign fc n !(inlineable n) ccs fargs ret)
-def (n, _, MkNmError x) = pure (Just $ JFun $ Fun.untyped n !(inlineable n) [] (Just $ UN Underscore)
-    !(liftEither $ mkGenericMsg $ evalStateT 0 (expr x)), [])
+data GroupNum : Type where
+
+export
+group : Ref Ctxt Defs => Ref GroupNum Nat => CallGroup -> Core (List Stmt, List String)
+group (Single False def) = do
+    (ms, imps) <- singleDef (const False) def
+    pure (maybe [] pure ms, imps)
+group (Single True d@(n, fc, (MkNmFun args x))) = do
+    (Just (JFun fun), imps) <- singleDef (== n) d
+        | _ => unreachable (__LOC__)
+    let assignArgs = Assign (PVar tailArgs Nothing) $ Tuple $ map (Var . Idr) args
+        lbl = Macro "label" [Var $ Lbl n]
+        readArgs = Assign (PTuple (map (\a => PVar (Idr a) Nothing) args)) (Var tailArgs)
+        fun =
+            { body := Sequence $ assignArgs ::: [lbl, readArgs, fun.body]
+            } fun
+    pure $ ([JFun fun], imps)
+group (Single True _) = unreachable (__LOC__)
+group (Group tail defs) = do
+    num <- get GroupNum
+    put GroupNum (S num)
+    let groupName = Idr $ MN "rec_group" (cast num)
+    let funName = Idr $ MN "rec_fun" 0
+
+    let canTail = \n => contains n tail
+
+    -- Compile each function individually
+    (funs, imps) <- unzip <$> traverse (\def => do
+        (Just (JFun fun), imps) <- singleDef canTail def
+            | _ => unreachable (__LOC__)
+        pure (fun, imps)) (forget defs)
+
+    -- Generate the sequence of `@goto`s at the start of the group
+    let gotoTable : JExpr = Sequence $ snoc
+            (map (\(fn, _, _) => And
+                (isEqual (Var funName) (Quote $ Var $ Lbl fn))
+                (Macro "goto" [Var $ Lbl fn])) defs)
+            (Throw $ call "IdrError" [Lit $ Str "invalid function in recursive group"])
+
+    -- Combine all definitions, with their respective `@label`
+    let impls : List JExpr =
+            funs >>= \f =>
+                let body = Syntax.Let (singleton (PTuple ((\(a, mty) => PVar a mty) <$> f.args), Var tailArgs)) f.body
+                 in [ Macro "label" [Var $ asLabel f.name]
+                    , body
+                    ]
+
+    -- Combine it all into the worker function
+    let groupFun = Syntax.MkFun
+            { name = groupName
+            , inline = NotInline
+            , args = [(underscore, Just $ AppTy "Val" [VarTy funName])]
+            , varargs = Just tailArgs
+            , body = Sequence (gotoTable ::: impls)
+            , whereBlock = [(funName, Nothing)]
+            }
+
+    -- Generate the proxy functions, which call the worker function
+    let proxys = mapMaybe (mkProxy groupName) (forget defs)
+
+    pure (JFun groupFun :: map JFun proxys, concat imps)
+  where
+    mkProxy : JName -> (Name, FC, NamedDef) -> Maybe Fun
+    mkProxy grp (fn, _, (MkNmFun args x)) =
+        Just $ Fun.untyped (Idr fn) NotInline (map Idr args) Nothing
+            (App (Var grp) $ call "Val" [Quote $ Var $ Lbl fn] :: map (Var . Idr) args)
+    mkProxy grp (fn, _, _) = Nothing
 
 moduleTrie : List (Name, FC, NamedDef) -> StringTrie (List Stmt)
 moduleTrie ns = foldl (\acc, (n, _, def) =>

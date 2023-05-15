@@ -19,22 +19,26 @@ where
         then cast c
         else "_u\{show $ ord c}"
 
-export
-name : Name -> Builder
-name (NS mi n) = fromString (showNSWithSep "." mi) ++ "." ++ name n
-name (UN (Basic str)) = fromString (escape str)
-name (UN (Field str)) = "f_" ++ fromString (escape str)
-name (UN Underscore) = "_"
-name (MN str i) = "_" ++ fromString str ++ "_" ++ showB i
-name (PV n i) = "pv_" ++ showB i ++ "_" ++ name n
-name (DN str n) = name n
-name (Nested (x, y) n) = "n_" ++ showB x ++ "_" ++ showB y ++ "_" ++ name n
-name (CaseBlock str i) = "cb_" ++ fromString str ++ "_" ++ showB i
-name (WithBlock str i) = "wb_" ++ fromString str ++ "_" ++ showB i
-name (Resolved i) = assert_total $ idris_crash "unreachable"
+parameters {default False isLabel : Bool}
+    export
+    name : Name -> Builder
+    name (NS mi n) =
+        let sep = if isLabel then "_" else "."
+         in fromString (showNSWithSep sep mi) ++ fromString sep ++ name n
+    name (UN (Basic str)) = fromString (escape str)
+    name (UN (Field str)) = "f_" ++ fromString (escape str)
+    name (UN Underscore) = "_"
+    name (MN str i) = "_" ++ fromString str ++ "_" ++ showB i
+    name (PV n i) = "pv_" ++ showB i ++ "_" ++ name n
+    name (DN str n) = name n
+    name (Nested (x, y) n) = "n_" ++ showB x ++ "_" ++ showB y ++ "_" ++ name n
+    name (CaseBlock str i) = "cb_" ++ fromString str ++ "_" ++ showB i
+    name (WithBlock str i) = "wb_" ++ fromString str ++ "_" ++ showB i
+    name (Resolved i) = assert_total $ idris_crash "unreachable"
 
 jname : JName -> Builder
 jname (Idr n) = name n
+jname (Lbl n) = name {isLabel = True} n
 jname (Raw str) = fromString str
 
 primType : PrimType -> Builder
@@ -56,6 +60,7 @@ primType WorldType = "Nothing"
 jtype : JType -> Builder
 jtype (PrimTy pty) = primType pty
 jtype (VarTy n) = jname n
+jtype (AppTy f xs) = jname f ++ "{" ++ sepBy "," (map jtype xs) ++ "}"
 
 args : (sep : String) -> (a -> Builder) -> List (a, Maybe JType) -> Builder
 args sep f xs =
@@ -111,7 +116,7 @@ jconst (I8 i) = "Int8(" ++ showB i ++ ")"
 jconst (I16 i) = "Int16(" ++ showB i ++ ")"
 jconst (I32 i) = "Int32(" ++ showB i ++ ")"
 jconst (I64 i) = "Int64(" ++ showB i ++ ")"
-jconst (BI i) = "big\"" ++ showB i ++ "\""
+jconst (BI i) = "flex\"" ++ showB i ++ "\""
 jconst (B8 m) = "UInt8(" ++ showB m ++ ")"
 jconst (B16 m) = "UInt16(" ++ showB m ++ ")"
 jconst (B32 m) = "UInt32(" ++ showB m ++ ")"
@@ -121,6 +126,15 @@ jconst (Ch c) = "'" ++ escapeChar c False ++ "'"
 jconst (Db x) = "Int(" ++ showB x ++ ")"
 jconst (PrT pty) = "nothing"
 jconst WorldVal = "nothing"
+
+tuple : List Builder -> Builder
+tuple [] = "()"
+tuple [x] = "(" ++ x ++ ",)"
+tuple xs = "(" ++ sepBy ", " xs ++ ")"
+
+pattern : Pattern -> Builder
+pattern (PVar x mty) = jname x ++ maybe "" (\ty => "::" ++ jtype ty) mty
+pattern (PTuple xs) = tuple $ map pattern xs
 
 jprimop : Bool -> PrimFn ar -> Vect ar JExpr -> Builder
 
@@ -133,8 +147,8 @@ jexpr p (Macro str xs) = app ("@" ++ fromString str) (map (jexpr False) xs)
 jexpr p (Lam n x) = paren p $ name n ++ " -> " ++ jexpr False x
 jexpr p (Let xs x) = paren p $
     "let " ++
-    concat (map (\(n, mty, x) =>
-        name n ++ maybe "" (("::" ++) . jtype) mty ++ " = " ++ jexpr False x ++ "; ") xs) ++
+    concat (map (\(pat, x) =>
+        pattern pat ++ " = " ++ jexpr False x ++ "; ") xs) ++
     jexpr False x ++
     " end"
 jexpr p (Throw x) = app "error" [jexpr False x]
@@ -143,11 +157,14 @@ jexpr p (IfExpr cond on_true on_false) = paren p $
     jexpr True on_true ++ " : " ++
     jexpr True on_false
 jexpr p (Sequence es) = "(" ++ sepBy "; " (jexpr False <$> forget es) ++ ")"
+jexpr p (And x y) = paren p $ jexpr True x ++ " && " ++ jexpr True y
 jexpr p (Lit cst) = jconst cst
 jexpr p (PrimOp f xs) = jprimop p f xs
-jexpr p (Tuple xs) = "(" ++ sepBy " " ((\x => jexpr False x ++ ",") <$> xs) ++ ")"
+jexpr p (Tuple xs) = tuple $ map (jexpr False) xs
 jexpr p (Field x str) = jexpr True x ++ "." ++ fromString str
 jexpr p (Embed x) = paren True $ fromString x
+jexpr p (Assign pat val) = paren p $ pattern pat ++ " = " ++ jexpr False val
+jexpr p (Quote q) = ":" ++ jexpr True q
 
 jprimop p (Add ty) xs = jbinop p "+" xs
 jprimop p (Sub ty) xs = jbinop p "-" xs
@@ -201,12 +218,21 @@ jstmt (JStruct x) =
 jstmt (JFun x) =
     "# " ++ showB x.name ++ "\n"
     ++ case x.inline of {YesInline => "@inline "; NotInline => ""}
-    ++ name x.name
-    ++ "(" ++ args ", " name x.args
+    ++ jname x.name
+    ++ "(" ++ args ", " jname x.args
     ++ maybe "" (\va =>
         (if isNil x.args then "" else ", ")
-        ++ name va ++ "...") x.varargs ++ ") = "
-    ++ jexpr False x.body 
+        ++ jname va ++ "...") x.varargs ++ ")"
+    ++ (if isNil x.whereBlock then "" else mkWhereBlock x.whereBlock)
+    ++ " = "
+    ++ jexpr False x.body
+  where
+    mkWhereBlock : List (JName, Maybe JType) -> Builder
+    mkWhereBlock xs =
+        " where {"
+        ++ sepBy "," (map (\(n, mty) =>
+            maybe (jname n) (\ty => jname n ++ "<:" ++ jtype ty) mty) xs)
+        ++ "}"
 jstmt (Declare fn) = "function " ++ name fn ++ " end # " ++ showB fn
 jstmt (Module n ss) =
     "module " ++ fromString n ++ "\n"

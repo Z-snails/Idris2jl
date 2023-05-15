@@ -17,7 +17,7 @@ OnceCell(::Type{T}) where {T} = OnceCell{T}(Uninit, nothing)
 OnceCell{T}(val) where {T} = OnceCell{T}(Init, val)
 OnceCell(val) = OnceCell{typeof(val)}(val)
 
-@noinline function get_cold(cell::OnceCell{T})::Union{T,Nothing} where {T}
+@noinline function get_cold(cell::OnceCell{T})::T where {T}
     while (@atomic cell.state) === Initialising end
     return cell.val
 end
@@ -33,7 +33,9 @@ function get(cell::OnceCell{T})::Union{T,Nothing} where {T}
     end
 end
 
-unsafe_get(cell::OnceCell{T})::Union{T,Nothing} = cell.val
+function unsafe_get(cell::OnceCell{T})::Union{T,Nothing} where {T}
+    return cell.val
+end
 
 function write_once!(cell::OnceCell{T}, val::T)::Bool where {T}
     (_, ok) = @atomicreplace cell.state Uninit => Initialising

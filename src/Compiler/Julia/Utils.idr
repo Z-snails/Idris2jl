@@ -1,5 +1,6 @@
 module Compiler.Julia.Utils
 
+import Data.List1
 import Data.String
 import Core.Core
 
@@ -40,3 +41,7 @@ findMap f [] = Nothing
 findMap f (x :: xs) = case f x of
     r@(Just _) => r
     Nothing => findMap f xs
+
+export
+unreachable : String -> Core a
+unreachable msg = throw $ InternalError "reached 'unreachable' at \{msg}"
