@@ -7,6 +7,10 @@ function believe_me(x)
     return x
 end
 
+struct Error <: Exception
+    message::String
+end
+
 struct Unreachable <: Exception
     location::String
 end

@@ -2,6 +2,7 @@ module Julia.Simd
 
 import Julia.Prelude
 
+public export
 data Simd : Nat -> Type -> Type where [external]
 
 data IsSimdElt : Type -> Type where
@@ -23,15 +24,15 @@ data IsSimdElt : Type -> Type where
 %foreign "julia:import SIMD, (_, _, count, val) -> SIMD.Vec(ntuple(_ -> val, count))"
 prim__splat : (0 c, a : _) -> Val c -> (val : a) -> Simd c a
 
-%inline
-splat : (0 _ : IsSimdElt a) => Val c -> a -> Simd c a
-splat c val = prim__splat _ _ c val 
+export %inline
+splat : (0 _ : IsSimdElt a) => (0 c : _) -> {auto vc : Val c} -> a -> Simd c a
+splat c val = prim__splat _ _ vc val
 
 %inline
 %foreign "julia:import SIMD, (_, _, x, y) -> x + y"
 prim__add : (0 c, a : _) -> Simd c a -> Simd c a -> Simd c a
 
-%inline
+export %inline
 add : (0 _ : IsSimdElt a) => Simd c a -> Simd c a -> Simd c a
 add x y = prim__add _ _ x y
 
@@ -39,7 +40,7 @@ add x y = prim__add _ _ x y
 %foreign "julia:import SIMD, (_, _, x, y) -> x * y"
 prim__mul : (0 c, a : _) -> Simd c a -> Simd c a -> Simd c a
 
-%inline
+export %inline
 mul : (0 _ : IsSimdElt a) => Simd c a -> Simd c a -> Simd c a
 mul x y = prim__mul _ _ x y
 
@@ -47,7 +48,7 @@ mul x y = prim__mul _ _ x y
 %foreign "julia:import SIMD, (_, _, x, y) -> x == y"
 prim__lanes_eq : (0 c, a : _) -> Simd c a -> Simd c a -> Simd c Bool
 
-%inline
+export %inline
 lanes_eq : Simd c a -> Simd c a -> Simd c Bool
 lanes_eq x y = prim__lanes_eq _ _ x y
 
@@ -55,5 +56,6 @@ lanes_eq x y = prim__lanes_eq _ _ x y
 %foreign "julia:import SIMD, (_, _, x, y) -> x < y"
 prim__lanes_lt : (0 c, a : _) -> Simd c a -> Simd c a -> Simd c Bool
 
+export %inline
 lanes_lt : (0 _ : IsSimdElt a) => Simd c a -> Simd c a -> Simd c Bool
 lanes_lt x y = prim__lanes_lt _ _ x y

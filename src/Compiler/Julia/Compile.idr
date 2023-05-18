@@ -115,8 +115,8 @@ parameters (canTail : Name -> Bool)
     expr _ (NmExtPrim fc p xs) = case lookup p externs of
         Just fn => lift $ mapFst (fc,) $ fn !(traverse (expr False) xs)
         Nothing => lift $ Left (fc, "Unknown primitive: \{show p}")
-    expr _ (NmForce fc lz x) = pure $ call "force" [!(expr False x)]
-    expr _ (NmDelay fc lz x) = pure $ Macro "delay" [!(expr False x)]
+    expr _ (NmForce fc lz x) = pure $ call "Idris.force" [!(expr False x)]
+    expr _ (NmDelay fc lz x) = pure $ Macro {ns=Just "Idris"} "delay" [!(expr False x)]
     expr _ (NmConCase fc sc xs def) = if requiresLet sc
         then do
             v <- MN "sc" <$> state (\x => (x + 1, x))
