@@ -106,7 +106,8 @@ portable = do
 copyDataFiles : Ref Ctxt Defs => (outDir : String) -> (exe : String) -> Core String
 copyDataFiles outDir exe = do
     let files = ["support.jl", "flexnum.jl"]
-        appDir = outDir </> (exe ++ "_app")
+        appDirRel = exe ++ "_app"
+        appDir = outDir </> appDirRel
     Right () <- coreLift $ createDir appDir
         | Left e => throw (FileErr appDir e)
     for_ files $ \f => do
@@ -115,7 +116,7 @@ copyDataFiles outDir exe = do
         Right () <- coreLift $ copyFile src (appDir </> f)
             | Left (e, _) => throw (FileErr dest e)
         pure ()
-    pure "include(\"./\{appDir}/support.jl\")"
+    pure "include(\"./\{appDirRel}/support.jl\")"
 
 includeDataFiles : Ref Ctxt Defs => Core String
 includeDataFiles = do
@@ -165,7 +166,7 @@ locateJulia = do
 
 interpret : Ref Ctxt Defs -> Ref Syn SyntaxInfo -> String -> ClosedTerm -> Core ()
 interpret c s tmpDir tm = do
-    Just out <- compile c s tmpDir tmpDir tm "__tmp_execute"
+    Just out <- compile c s tmpDir tmpDir tm "_tmp_julia"
         | Nothing => throw $ InternalError "error compiling code"
     Just jl <- locateJulia
         | Nothing => coreLift_ $ system [out]
