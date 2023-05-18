@@ -1,4 +1,3 @@
-
 module FlexNum
 export FlexInt, @flex_str
 
@@ -24,7 +23,7 @@ end
 """
     FlexNum <: Base.Signed
 
-Arbitrary precision integer type, which switches from machine integers to GMP integers on the fly.
+Arbitrary precision integer type, which switches from machine integers to GMP integers when needed.
 """
 struct FlexInt <: Base.Signed
     int::Int
@@ -32,8 +31,7 @@ struct FlexInt <: Base.Signed
 end
 
 @inline FlexInt(x::Int) = FlexInt(x, nothing)
-FlexInt(x::BigInt) = FlexInt(0, x)
-# FlexNum(x::Base.BigInt) = is_small(x) ? FlexNum(unsafe_get_small(x)) : FlexNum(0, x)
+@inline FlexInt(x::BigInt) = FlexInt(0, x)
 
 macro flex_str(x)
     val = parse(BigInt, x)
@@ -48,6 +46,8 @@ end
 @inline is_small(x::FlexInt) = Base.isnothing(x.big)
 
 BigInt(x::FlexInt)::BigInt = is_small(x) ? BigInt(x.int) : x.big
+Base.convert(::Type{to}, x::FlexInt) where {to<:Integer} = is_small(x) ? Base.convert(to, x.int) : Base.convert(to, x.big)
+Base.unsafe_trunc(::Type{to}, x::FlexInt) where {to<:Integer} = is_small(x) ? Base.unsafe_trunc(to, x.int) : Base.unsafe_trunc(to, x.big)
 
 Base.string(n::FlexInt, base::Integer=10, pad::Integer=1) = is_small(n) ? Base.string(n.int, base=base, pad=pad) : Base.string(n.big, base=base, pad=pad)
 Base.show(io::IO, x::FlexInt) = Base.print(io, Base.string(x))

@@ -76,17 +76,17 @@ externs = fromList
         [_, mut, w] => pure $ Field mut "val"
         _ => Left argError)
     , (mkName ioRef "prim__writeIORef", \case
-        [_, mut, val, w] => pure $ call "idris_writeIORef" [mut, val]
+        [_, mut, val, w] => pure $ call "Idris.writeIORef" [mut, val]
         _ => Left argError)
 
     , (mkName ioArray "prim__newArray", \case
-        [_, n, val, w] => pure $ call "idris_newArray" [n, val]
+        [_, n, val, w] => pure $ call "Idris.newArray" [n, val]
         _ => Left argError)
     , (mkName ioArray "prim__arrayGet", \case
-        [_, arr, idx, w] => pure $ call "idris_arrayGet" [arr, idx]
+        [_, arr, idx, w] => pure $ call "Idris.arrayGet" [arr, idx]
         _ => Left argError)
     , (mkName ioArray "prim__arraySet", \case
-        [_, arr, idx, val, w] => pure $ call "idris_arraySet!" [arr, idx, val]
+        [_, arr, idx, val, w] => pure $ call "Idris.arraySet!" [arr, idx, val]
         _ => Left argError)
     ]
 
@@ -133,13 +133,13 @@ parameters (canTail : Name -> Bool)
         else mkConstCase False fc !(expr False sc) xs def
     expr _ (NmPrimVal fc cst) = pure $ Lit cst
     expr _ (NmErased fc) = pure $ Var "nothing"
-    expr _ (NmCrash fc str) = pure $ Throw (call "IdrError" [Lit (Str str)])
+    expr _ (NmCrash fc str) = pure $ Throw (call "Idris.Error" [Lit (Str str)])
 
     bindAll : JExpr -> Nat -> List Name -> JExpr -> JExpr
     bindAll sc k [] e = e
     bindAll sc k (n :: ns) e = mkLet (n, Nothing, Field sc "v\{show k}") (bindAll sc (S k) ns e)
 
-    mkConCase _ fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
+    mkConCase _ fc sc [] Nothing = pure $ Macro {ns=Just "Idris"} "unreachable" [Lit (Str (show fc))]
     mkConCase tp fc sc [] (Just def) = expr tp def
     mkConCase tp fc sc (MkNConAlt n inf _ as e :: xs) def =
         let f = \e => case (inf, as) of
@@ -150,7 +150,7 @@ parameters (canTail : Name -> Bool)
                     (bindAll sc 0 as e)
         in pure $ f !(expr tp e) !(mkConCase tp fc sc xs def)
 
-    mkConstCase _ fc sc [] Nothing = pure $ Macro "unreachable" [Lit (Str (show fc))]
+    mkConstCase _ fc sc [] Nothing = pure $ Macro {ns=Just "Idris"} "unreachable" [Lit (Str (show fc))]
     mkConstCase tp fc sc [] (Just def) = expr tp def
     mkConstCase tp fc sc (MkNConstAlt v e :: xs) def =
         pure $ IfExpr (PrimOp (EQ (typeOf v)) [sc, Lit v])
@@ -245,17 +245,17 @@ knownForeign n inl (cc :: ccs) = try (trim cc) <|> knownForeign n inl ccs
     try "scheme:blodwen-buffer-size" =
         Just (callSupport inl [Nothing] "Base.length", [])
     try "C:idris2_isNull, libidris2_support, idris_support.h" =
-        Just (callSupport YesInline [Just voidPtr] "idris_isNull", [])
+        Just (callSupport YesInline [Just voidPtr] "Idris.isNull", [])
     try "C:idris2_getNull, libidris2_support, idris_support.h" =
-        Just (callSupport YesInline [] "idris_getNull", [])
+        Just (callSupport YesInline [] "Idris.getNull", [])
     try "scheme:blodwen-thread" =
-        Just (callSupport inl [Nothing] "idris_fork", [])
+        Just (callSupport inl [Nothing] "Idris.fork", [])
     try "scheme:string-concat" =
-        Just (callSupport inl [Nothing] "idris_fastConcat", [])
+        Just (callSupport inl [Nothing] "Idris.fastConcat", [])
     try "scheme:string-pack" =
-        Just (callSupport inl [Nothing] "idris_fastPack", [])
+        Just (callSupport inl [Nothing] "Idris.fastPack", [])
     try "scheme:string-unpack" =
-        Just (callSupport inl [Nothing] "idris_fastUnpack", [])
+        Just (callSupport inl [Nothing] "Idris.fastUnpack", [])
     try _ = Nothing
 
 foreign : FC -> Name  -> InlineOk -> List String -> List CFType -> CFType -> Either Error (Fun, List String)
@@ -277,7 +277,7 @@ foreign fc n inl ccs args ret = do
                 $ filter (\(_, ty) => case ty of {CFWorld => False; _ => True}) args
             let call = Macro "ccall" [App fun cargs `Annot` !(mapFst (GenericMsg fc) (cType ret))]
                 call = case ret of
-                    CFString => Compile.call "idris_from_Cstring" [call]
+                    CFString => Compile.call "Idris.from_Cstring" [call]
                     _ => call
             pure (MkFun (Idr n) inl (map (\(i, ty) => (Idr i, juliaType ty)) args) Nothing call [], [])
 
@@ -340,7 +340,7 @@ group (Group tail defs) = do
             (map (\(fn, _, _) => And
                 (isEqual (Var funName) (Quote $ Var $ Lbl fn))
                 (Macro "goto" [Var $ Lbl fn])) defs)
-            (Throw $ call "IdrError" [Lit $ Str "invalid function in recursive group"])
+            (Throw $ call "Idris.Error" [Lit $ Str "invalid function in recursive group"])
 
     -- Combine all definitions, with their respective `@label`
     let impls : List JExpr =

@@ -3,15 +3,18 @@ module Compiler.Julia
 import Core.CompileExpr
 import Core.Context
 import Core.Core
+import Core.Directory
 import Core.Name
 import Compiler.Common
 import Libraries.Utils.Path
 import Libraries.Data.String.Builder
+import Data.List
 import Data.Vect
 import Idris.Syntax
 import Idris.Version
 import System
 import System.File
+import System.Directory
 import Compiler.Julia.Compile
 import Compiler.Julia.Header
 import Compiler.Julia.Printer
@@ -95,9 +98,35 @@ renameMainDef (n, fc, def) = (renameMain n, fc, renameMainDef' def)
     renameMainDef' (MkNmForeign ccs fargs ret) = MkNmForeign ccs fargs ret
     renameMainDef' (MkNmError x) = MkNmError (renameMainExp x)
 
+portable : Ref Ctxt Defs => Core Bool
+portable = do
+    ds <- getDirectives (Other "julia")
+    pure $ "portable" `elem` ds
+
+copyDataFiles : Ref Ctxt Defs => (outDir : String) -> (exe : String) -> Core String
+copyDataFiles outDir exe = do
+    let files = ["support.jl", "flexnum.jl"]
+        appDir = outDir </> (exe ++ "_app")
+    Right () <- coreLift $ createDir appDir
+        | Left e => throw (FileErr appDir e)
+    for_ files $ \f => do
+        src <- findDataFile "julia/\{f}"
+        let dest = appDir </> f
+        Right () <- coreLift $ copyFile src (appDir </> f)
+            | Left (e, _) => throw (FileErr dest e)
+        pure ()
+    pure "include(\"./\{appDir}/support.jl\")"
+
+includeDataFiles : Ref Ctxt Defs => Core String
+includeDataFiles = do
+    incl <- findDataFile "julia/support.jl"
+    pure "include(\"\{incl}\")"
+
 compile : Ref Ctxt Defs -> Ref Syn SyntaxInfo -> String -> String -> ClosedTerm -> String -> Core (Maybe String)
 compile _ _ outDir tmpDir tm exe = do
     let outFile = outDir </> exe
+
+    -- Compiling functions
     cdata <- getCompileData False Cases tm
     let ndefs = renameMainDef <$> cdata.namedDefs
         mainExpr = renameMainExp $ forget cdata.mainExpr
@@ -106,8 +135,15 @@ compile _ _ outDir tmpDir tm exe = do
             | Nothing => unreachable (__LOC__)
     _ <- newRef GroupNum 0
     (fs, imps) <- unzip <$> traverse Compile.group gs
+
+    -- Support files
+    support <- if !portable
+        then copyDataFiles outDir exe
+        else includeDataFiles
+
     let ds = build $ sepBy "\n"
             [ fromString header
+            , fromString support
             , sepBy "\n" $ getImport <$> nub (join imps)
             , sepBy "\n" $ jstmt <$> decls
             , sepBy "\n" $ fs >>= map jstmt

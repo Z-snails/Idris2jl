@@ -74,7 +74,11 @@ data JExpr : Type where
 
     -- control flow
     App : JExpr -> List JExpr -> JExpr
-    Macro : String -> List JExpr -> JExpr
+    Macro :
+        {default Nothing ns : Maybe String} ->
+        String ->
+        List JExpr ->
+        JExpr
     Lam : Name -> JExpr -> JExpr
     Let : List1 (Pattern, JExpr) -> JExpr -> JExpr
     Throw : JExpr -> JExpr

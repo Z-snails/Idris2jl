@@ -13,7 +13,7 @@ authors = "Zoe Stafford"
 -- langversion
 
 -- packages to add to search path
-depends = idris2, prettier
+depends = idris2
 
 -- modules to install
 modules = Compiler.Julia

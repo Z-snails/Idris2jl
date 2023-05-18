@@ -7,14 +7,17 @@ Compiling Idris 2 to it has 2 main goals:
 1. Performance - especially for numeric intesive code
 2. Access Julia's many libraries - espcially data science
 
+## Requirements
+- recent idris2
+
 ## Performance
 
 TODO
 
 ### Simd
 
-TODO (see `test/src/Simd/AsciiValidator.idr`)
+TODO
 
 ## Libraries/FFI
 
-The julia ffi allows calling any julia code, as well as importing libraries. (see `test/src/Simd/AsciiValidator.idr`)
+The julia ffi allows calling any julia code, as well as importing libraries.

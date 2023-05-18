@@ -116,7 +116,7 @@ jconst (I8 i) = "Int8(" ++ showB i ++ ")"
 jconst (I16 i) = "Int16(" ++ showB i ++ ")"
 jconst (I32 i) = "Int32(" ++ showB i ++ ")"
 jconst (I64 i) = "Int64(" ++ showB i ++ ")"
-jconst (BI i) = "flex\"" ++ showB i ++ "\""
+jconst (BI i) = "Idris.flex\"" ++ showB i ++ "\""
 jconst (B8 m) = "UInt8(" ++ showB m ++ ")"
 jconst (B16 m) = "UInt16(" ++ showB m ++ ")"
 jconst (B32 m) = "UInt32(" ++ showB m ++ ")"
@@ -143,7 +143,11 @@ jexpr p (Annot x ty) = jexpr True x ++ "::" ++ jtype ty
 jexpr p (IsA x ty) = app "isa" [jexpr False x, jtype ty]
 jexpr p (Ty ty) = jtype ty
 jexpr p (App x xs) = app (jexpr True x) (map (jexpr False) xs)
-jexpr p (Macro str xs) = app ("@" ++ fromString str) (map (jexpr False) xs)
+jexpr p (Macro {ns} str xs) =
+    let m = case ns of
+            Nothing => "@" ++ fromString str
+            Just ns => fromString ns ++ ".@" ++ fromString str
+     in app m (map (jexpr False) xs)
 jexpr p (Lam n x) = paren p $ name n ++ " -> " ++ jexpr False x
 jexpr p (Let xs x) = paren p $
     "let " ++
@@ -204,9 +208,9 @@ jprimop p DoubleATan [x] = app "atan" [jexpr False x]
 jprimop p DoubleSqrt [x] = app "sqrt" [jexpr False x]
 jprimop p DoubleFloor [x] = app "floor" [jexpr False x]
 jprimop p DoubleCeiling [x] = app "ceil" [jexpr False x]
-jprimop p (Cast _ to) [x] = app "idris_cast" [primType to, jexpr False x]
-jprimop p BelieveMe [_, _, x] = app "believe_me" [jexpr False x]
-jprimop p Crash [_, msg] = app "idris_crash" [jexpr False msg]
+jprimop p (Cast _ to) [x] = app "Idris.cast" [primType to, jexpr False x]
+jprimop p BelieveMe [_, _, x] = app "Idris.believe_me" [jexpr False x]
+jprimop p Crash [_, msg] = app "Idris.crash" [jexpr False msg]
 
 export
 jstmt : Stmt -> Builder
