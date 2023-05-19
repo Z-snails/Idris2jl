@@ -111,17 +111,17 @@ copyDataFiles outDir exe = do
     Right () <- coreLift $ createDir appDir
         | Left e => throw (FileErr appDir e)
     for_ files $ \f => do
-        src <- findDataFile "julia/\{f}"
+        src <- findDataFile "julia/Idris/src/\{f}"
         let dest = appDir </> f
         Right () <- coreLift $ copyFile src (appDir </> f)
             | Left (e, _) => throw (FileErr dest e)
         pure ()
-    pure "include(\"./\{appDirRel}/support.jl\")"
+    pure "module Idris include(\"./\{appDirRel}/support.jl\") end"
 
 includeDataFiles : Ref Ctxt Defs => Core String
 includeDataFiles = do
-    incl <- findDataFile "julia/support.jl"
-    pure "include(\"\{incl}\")"
+    incl <- findDataFile "julia/Idris"
+    pure "Base.push!(Base.LOAD_PATH, \"\{incl}\")\nimport Idris"
 
 compile : Ref Ctxt Defs -> Ref Syn SyntaxInfo -> String -> String -> ClosedTerm -> String -> Core (Maybe String)
 compile _ _ outDir tmpDir tm exe = do

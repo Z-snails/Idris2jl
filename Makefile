@@ -9,6 +9,10 @@ build:
 install-support:
 	$(MAKE) -C support/julia install
 
+.PHONY: uninstall-support
+uninstall-support:
+	$(MAKE) -C support/julia uninstall
+
 .PHONY: test
 test:
 	$(MAKE) -C tests test

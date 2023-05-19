@@ -46,7 +46,9 @@ end
 @inline is_small(x::FlexInt) = Base.isnothing(x.big)
 
 BigInt(x::FlexInt)::BigInt = is_small(x) ? BigInt(x.int) : x.big
+
 Base.convert(::Type{to}, x::FlexInt) where {to<:Integer} = is_small(x) ? Base.convert(to, x.int) : Base.convert(to, x.big)
+
 Base.unsafe_trunc(::Type{to}, x::FlexInt) where {to<:Integer} = is_small(x) ? Base.unsafe_trunc(to, x.int) : Base.unsafe_trunc(to, x.big)
 
 Base.string(n::FlexInt, base::Integer=10, pad::Integer=1) = is_small(n) ? Base.string(n.int, base=base, pad=pad) : Base.string(n.big, base=base, pad=pad)

@@ -1,6 +1,4 @@
-module Idris
-
-include("./flexnum.jl")
+include("flexnum.jl")
 using .FlexNum
 
 function believe_me(x)
@@ -20,21 +18,21 @@ macro unreachable(location)
 end
 
 # From Integer
-cast(::Type{to}, x::Integer) where { to <: Integer } = unsafe_trunc(to, x)
+cast(::Type{to}, x::Integer) where {to<:Integer} = unsafe_trunc(to, x)
 cast(::Type{String}, x::Integer) = string(x)
 cast(::Type{Char}, x::Integer) = Char(x)
-cast(::Type{to}, x::Integer) where { to <: AbstractFloat } = convert(to, x)
+cast(::Type{to}, x::Integer) where {to<:AbstractFloat} = convert(to, x)
 
 # From Float
-cast(::Type{to}, x::AbstractFloat) where { to <: Integer } = unsafe_trunc(to, x)
+cast(::Type{to}, x::AbstractFloat) where {to<:Integer} = unsafe_trunc(to, x)
 cast(::Type{String}, x::AbstractFloat) = string(x)
 
 # From Char
 cast(::Type{String}, x::Char) = string(x)
-cast(::Type{to}, x::Char) where { to <: Integer } = convert(to, x)
+cast(::Type{to}, x::Char) where {to<:Integer} = convert(to, x)
 
 # From String
-cast(::Type{to}, x::String) where { to <: Integer } = parse(to, x)
+cast(::Type{to}, x::String) where {to<:Integer} = parse(to, x)
 cast(::Type{Float64}, x::String) = parse(Float64, x)
 
 mutable struct Delay
@@ -113,8 +111,8 @@ end
 @inline writeIORef(mut::Mut, val) = (mut.val = val; nothing)
 
 newArray(n, val) = fill!(Vector{Any}(undef, n), val)
-@inline arrayGet(arr, idx) = arr[idx + 1]
-@inline arraySet(arr, idx, val) = (arr[idx + 1] = val; nothing)
+@inline arrayGet(arr, idx) = arr[idx+1]
+@inline arraySet(arr, idx, val) = (arr[idx+1] = val; nothing)
 
 function from_Cstring(x::Cstring)
     acc = IOBuffer()
@@ -125,6 +123,4 @@ function from_Cstring(x::Cstring)
     end
     Base.Libc.free(x)
     return take!(acc)
-end
-
 end
