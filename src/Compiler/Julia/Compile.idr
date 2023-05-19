@@ -106,8 +106,8 @@ parameters (canTail : Name -> Bool)
                 ::: [Macro "goto" [Var $ Lbl n]]
             else pure $ App !(expr False f) !(traverse (expr False) xs)
     expr _ (NmApp fc x xs) = pure $ App !(expr False x) !(traverse (expr False) xs)
-    -- expr _ (NmCon fc n NIL tag []) = pure $ Var "nothing"
-    -- expr _ (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Cons" !(traverse (expr False) xs)
+    expr _ (NmCon fc n NIL tag []) = pure $ Var "nothing"
+    expr _ (NmCon fc n CONS tag xs@[_, _]) = pure $ call "Idris.Cons" !(traverse (expr False) xs)
     expr _ (NmCon fc n inf tag xs) = pure $ App (Var $ Idr n) !(traverse (expr False) xs)
     expr _ (NmOp fc f xs) = if isCompare f
         then pure $ call "Int" [PrimOp f !(traverse (expr False) xs)]
@@ -143,9 +143,9 @@ parameters (canTail : Name -> Bool)
     mkConCase tp fc sc [] (Just def) = expr tp def
     mkConCase tp fc sc (MkNConAlt n inf _ as e :: xs) def =
         let f = \e => case (inf, as) of
-                -- (NIL, []) => IfExpr (call "isnothing" [sc]) e
-                -- (CONS, [fst, snd]) => IfExpr (call "notnothing" [sc])
-                --     (Let ((PVar fst Nothing, Field sc "fst") ::: [(PVar snd Nothing, Field sc "snd")]) e)
+                (NIL, []) => IfExpr (call "isnothing" [sc]) e
+                (CONS, [fst, snd]) => IfExpr (call "Idris.iscons" [sc])
+                    (Let ((PVar (Idr fst) Nothing, Field sc "fst") ::: [(PVar (Idr snd) Nothing, Field sc "snd")]) e)
                 _ => IfExpr (sc `IsA` (VarTy $ Idr n))
                     (bindAll sc 0 as e)
         in pure $ f !(expr tp e) !(mkConCase tp fc sc xs def)

@@ -66,10 +66,18 @@ end
 
 Base.cconvert(::Type{Ptr{Cvoid}}, x::Buffer) = x.ptr
 
+struct Cons
+    fst
+    snd
+end
+
+iscons(x::Cons) = true
+iscons(::Any) = false
+
 function fastUnpack(x::AbstractString)
-    acc = Prelude.Basic.Nil
+    acc = nothing
     for c in Iterators.reverse(x)
-        acc = Prelude.Basics._u58_u58(c, acc)
+        acc = Cons(c, acc)
     end
     return acc
 end
@@ -79,7 +87,7 @@ function listPrint(::Type{T}, xs) where {T}
         return ""
     else
         io = IOBuffer()
-        while isa(xs, Prelude.Basic._u58_u58)
+        while iscons(xs)
             print(io, xs.fst::T)
             xs = xs.snd
         end

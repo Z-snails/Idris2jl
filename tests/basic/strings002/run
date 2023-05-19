@@ -1,0 +1,4 @@
+rm -r build
+
+$1 --cg chez -x main strings.idr > expected
+$1 -x main strings.idr > output
